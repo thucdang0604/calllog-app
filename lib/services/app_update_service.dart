@@ -1,7 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -10,11 +10,15 @@ class AppUpdateService {
   static const _repository = 'thucdang0604/calllog-app';
   static const _lastCheckKey = 'app_update_last_check_ms';
   static const _pendingApkPathKey = 'app_update_pending_apk_path';
+  static const _readyApkPathKey = 'app_update_ready_apk_path';
+  static const _readyVersionKey = 'app_update_ready_version';
   static const _checkInterval = Duration(hours: 1);
   static const _platform = MethodChannel('call_log_manager_updates');
 
   bool _isChecking = false;
+  bool _isDownloading = false;
   bool _isInstallingPending = false;
+  bool _readyBannerShown = false;
 
   Future<void> checkForUpdate(
     BuildContext context, {
@@ -31,18 +35,31 @@ class AppUpdateService {
       final preferences = await SharedPreferences.getInstance();
       final now = DateTime.now().millisecondsSinceEpoch;
       final lastCheck = preferences.getInt(_lastCheckKey);
+      final currentVersion = await _platform.invokeMethod<String>(
+        'getAppVersion',
+      );
+      if (currentVersion == null || currentVersion.isEmpty) {
+        throw const FormatException('Không đọc được phiên bản ứng dụng.');
+      }
+
+      if (await _showReadyUpdateIfAvailable(
+        context,
+        preferences,
+        currentVersion,
+      )) {
+        return;
+      }
       if (!forceCheck &&
           lastCheck != null &&
           now >= lastCheck &&
           now - lastCheck < _checkInterval.inMilliseconds) {
         return;
       }
-
-      final currentVersion = await _platform.invokeMethod<String>(
-        'getAppVersion',
-      );
-      if (currentVersion == null || currentVersion.isEmpty) {
-        throw const FormatException('Không đọc được phiên bản ứng dụng.');
+      if (_isDownloading) {
+        if (forceCheck && context.mounted) {
+          _showMessage(context, 'Bản cập nhật đang được tải ở chế độ nền.');
+        }
+        return;
       }
 
       client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
@@ -138,9 +155,11 @@ class AppUpdateService {
               child: const Text('Để sau'),
             ),
             FilledButton.icon(
-              onPressed: () async {
+              onPressed: () {
                 Navigator.of(dialogContext).pop();
-                await _downloadAndInstall(context, downloadUri, latestTag);
+                unawaited(
+                  _downloadInBackground(context, downloadUri, latestTag),
+                );
               },
               icon: const Icon(Icons.download),
               label: const Text('Tải cập nhật'),
@@ -167,19 +186,48 @@ class AppUpdateService {
     try {
       final preferences = await SharedPreferences.getInstance();
       final apkPath = preferences.getString(_pendingApkPathKey);
-      if (apkPath == null || apkPath.isEmpty) return;
-
-      final canInstall = await _platform.invokeMethod<bool>('canInstallApk');
-      if (canInstall != true) {
-        if (context.mounted) {
-          _showMessage(
+      if (apkPath == null || apkPath.isEmpty) {
+        final currentVersion = await _platform.invokeMethod<String>(
+          'getAppVersion',
+        );
+        if (currentVersion != null && context.mounted) {
+          await _showReadyUpdateIfAvailable(
             context,
-            'Cho phép APP NVPTTT cài ứng dụng để tiếp tục cập nhật.',
+            preferences,
+            currentVersion,
           );
         }
         return;
       }
-      await _installDownloadedApk(context, apkPath, preferences);
+
+      final canInstall = await _platform.invokeMethod<bool>('canInstallApk');
+      if (canInstall != true) {
+        if (context.mounted) {
+          final readyPath = preferences.getString(_readyApkPathKey);
+          final readyVersion = preferences.getString(_readyVersionKey);
+          if (readyPath != null && readyVersion != null) {
+            _showReadyBanner(context, readyPath, readyVersion);
+            _showMessage(
+              context,
+              'Cho phép APP NVPTTT cài ứng dụng rồi quay lại để tiếp tục.',
+            );
+          } else {
+            _showMessage(
+              context,
+              'Cho phép APP NVPTTT cài ứng dụng để tiếp tục cập nhật.',
+            );
+          }
+        }
+        return;
+      }
+      final started = await _platform.invokeMethod<bool>('installUpdateApk', {
+        'path': apkPath,
+      });
+      if (started == true) {
+        await preferences.remove(_pendingApkPathKey);
+      } else if (context.mounted) {
+        _showMessage(context, 'Không mở được trình cài đặt Android.');
+      }
     } catch (_) {
       if (context.mounted) {
         _showMessage(context, 'Không mở được trình cài đặt Android.');
@@ -189,49 +237,39 @@ class AppUpdateService {
     }
   }
 
-  Future<void> _downloadAndInstall(
+  Future<void> _downloadInBackground(
     BuildContext context,
     Uri downloadUri,
     String version,
   ) async {
-    final progress = ValueNotifier(const _UpdateDownloadProgress(0, 0));
-    var progressDialogOpen = true;
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => _UpdateDownloadProgressDialog(progress: progress),
-    );
+    if (_isDownloading) return;
+    _isDownloading = true;
+    if (context.mounted) {
+      _showMessage(
+        context,
+        'Đang tải bản cập nhật ở nền. Bạn vẫn có thể sử dụng ứng dụng.',
+      );
+    }
 
     try {
-      final apkPath = await _downloadApk(downloadUri, version, progress);
-      if (context.mounted) {
-        Navigator.of(context, rootNavigator: true).pop();
-        progressDialogOpen = false;
-      }
-
+      final apkPath = await _downloadApk(downloadUri, version);
       final preferences = await SharedPreferences.getInstance();
-      await preferences.setString(_pendingApkPathKey, apkPath);
-      await _installDownloadedApk(context, apkPath, preferences);
+      await preferences.setString(_readyApkPathKey, apkPath);
+      await preferences.setString(_readyVersionKey, version);
+      if (context.mounted) _showReadyBanner(context, apkPath, version);
     } catch (_) {
       if (context.mounted) {
-        if (progressDialogOpen) {
-          Navigator.of(context, rootNavigator: true).pop();
-        }
         _showMessage(
           context,
-          'Tải APK hoặc mở trình cài đặt chưa thành công. Hãy thử lại.',
+          'Tải bản cập nhật chưa thành công. Hãy thử lại sau.',
         );
       }
     } finally {
-      progress.dispose();
+      _isDownloading = false;
     }
   }
 
-  Future<String> _downloadApk(
-    Uri downloadUri,
-    String version,
-    ValueNotifier<_UpdateDownloadProgress> progress,
-  ) async {
+  Future<String> _downloadApk(Uri downloadUri, String version) async {
     final safeVersion = version.replaceAll(RegExp(r'[^0-9.]'), '_');
     final apkPath = await _platform.invokeMethod<String>('getUpdateApkPath', {
       'version': safeVersion,
@@ -278,7 +316,6 @@ class AppUpdateService {
         )) {
           sink.add(chunk);
           receivedBytes += chunk.length;
-          progress.value = _UpdateDownloadProgress(receivedBytes, totalBytes);
         }
         await sink.flush();
       } finally {
@@ -291,11 +328,6 @@ class AppUpdateService {
       }
       if (await apkFile.exists()) await apkFile.delete();
       final completedFile = await partialFile.rename(apkFile.path);
-      progress.value = _UpdateDownloadProgress(
-        receivedBytes,
-        totalBytes,
-        completed: true,
-      );
       return completedFile.path;
     } catch (_) {
       if (await partialFile.exists()) await partialFile.delete();
@@ -305,25 +337,83 @@ class AppUpdateService {
     }
   }
 
-  Future<void> _installDownloadedApk(
+  Future<void> _installReadyApk(BuildContext context, String apkPath) async {
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setString(_pendingApkPathKey, apkPath);
+      final started = await _platform.invokeMethod<bool>('installUpdateApk', {
+        'path': apkPath,
+      });
+      if (started == true) await preferences.remove(_pendingApkPathKey);
+
+      if (context.mounted) {
+        _showMessage(
+          context,
+          started == true
+              ? 'Hãy xác nhận cài đặt trong cửa sổ Android.'
+              : 'Hãy cho phép APP NVPTTT cài ứng dụng rồi quay lại để tiếp tục.',
+        );
+      }
+    } catch (_) {
+      if (context.mounted) {
+        _showMessage(context, 'Không mở được trình cài đặt Android.');
+      }
+    }
+  }
+
+  Future<bool> _showReadyUpdateIfAvailable(
     BuildContext context,
-    String apkPath,
     SharedPreferences preferences,
+    String currentVersion,
   ) async {
-    final started = await _platform.invokeMethod<bool>('installUpdateApk', {
-      'path': apkPath,
-    });
-    if (started == true) {
-      await preferences.remove(_pendingApkPathKey);
-      return;
+    final apkPath = preferences.getString(_readyApkPathKey);
+    final version = preferences.getString(_readyVersionKey);
+    if (apkPath == null || version == null) return false;
+
+    final readyParts = _versionParts(version);
+    final currentParts = _versionParts(currentVersion);
+    if (readyParts == null ||
+        currentParts == null ||
+        !_isNewer(readyParts, currentParts) ||
+        !await File(apkPath).exists()) {
+      await preferences.remove(_readyApkPathKey);
+      await preferences.remove(_readyVersionKey);
+      return false;
     }
 
-    if (context.mounted) {
-      _showMessage(
-        context,
-        'Hãy cho phép APP NVPTTT cài ứng dụng rồi quay lại để tiếp tục.',
-      );
-    }
+    if (context.mounted) _showReadyBanner(context, apkPath, version);
+    return true;
+  }
+
+  void _showReadyBanner(BuildContext context, String apkPath, String version) {
+    if (_readyBannerShown) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+
+    _readyBannerShown = true;
+    messenger.showMaterialBanner(
+      MaterialBanner(
+        leading: const Icon(Icons.system_update_alt),
+        content: Text('Bản cập nhật ${_displayVersion(version)} đã tải xong.'),
+        actions: [
+          TextButton(
+            onPressed: () {
+              _readyBannerShown = false;
+              messenger.hideCurrentMaterialBanner();
+            },
+            child: const Text('Để sau'),
+          ),
+          FilledButton(
+            onPressed: () {
+              _readyBannerShown = false;
+              messenger.hideCurrentMaterialBanner();
+              unawaited(_installReadyApk(context, apkPath));
+            },
+            child: const Text('Cài đặt'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showMessage(BuildContext context, String message) {
@@ -364,61 +454,4 @@ class AppUpdateService {
 
   static String _displayVersion(String version) =>
       version.trim().replaceFirst(RegExp(r'^[vV]'), '').split('+').first;
-}
-
-class _UpdateDownloadProgress {
-  const _UpdateDownloadProgress(
-    this.receivedBytes,
-    this.totalBytes, {
-    this.completed = false,
-  });
-
-  final int receivedBytes;
-  final int totalBytes;
-  final bool completed;
-
-  double? get fraction => totalBytes > 0
-      ? (completed ? 1.0 : (receivedBytes / totalBytes).clamp(0.0, 0.99))
-            .toDouble()
-      : null;
-}
-
-class _UpdateDownloadProgressDialog extends StatelessWidget {
-  const _UpdateDownloadProgressDialog({required this.progress});
-
-  final ValueListenable<_UpdateDownloadProgress> progress;
-
-  @override
-  Widget build(BuildContext context) {
-    return PopScope(
-      canPop: false,
-      child: AlertDialog(
-        title: const Text('Đang tải bản cập nhật'),
-        content: ValueListenableBuilder<_UpdateDownloadProgress>(
-          valueListenable: progress,
-          builder: (context, value, child) => Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              LinearProgressIndicator(value: value.fraction),
-              const SizedBox(height: 12),
-              Text(
-                value.totalBytes > 0
-                    ? '${(value.fraction! * 100).round()}%  ·  '
-                          '${_formatBytes(value.receivedBytes)} / '
-                          '${_formatBytes(value.totalBytes)}'
-                    : 'Đã tải ${_formatBytes(value.receivedBytes)}',
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  String _formatBytes(int bytes) {
-    final megabytes = bytes / (1024 * 1024);
-    return '${megabytes.toStringAsFixed(1)} MB';
-  }
 }

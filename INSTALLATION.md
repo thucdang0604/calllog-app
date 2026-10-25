@@ -9,7 +9,7 @@
 
 ## Cập nhật
 
-Khi mở ứng dụng hoặc quay lại app, app kiểm tra GitHub Releases tối đa một lần mỗi giờ. Nút cập nhật trên thanh trên cùng sẽ kiểm tra ngay. Nếu có bản mới, chọn **Tải cập nhật**; APK sẽ tải trong app kèm tiến độ, rồi trình cài đặt Android mở để bạn xác nhận cài đè lên bản cũ. Nếu được hỏi, bật quyền cho APP NVPTTT cài ứng dụng và quay lại app để tiếp tục.
+Khi mở ứng dụng hoặc quay lại app, app kiểm tra GitHub Releases tối đa một lần mỗi giờ. Nút cập nhật trên thanh trên cùng sẽ kiểm tra ngay. Nếu có bản mới, chọn **Tải cập nhật**; APK sẽ tải ngầm trong khi bạn tiếp tục sử dụng app. Khi hoàn tất, app hiện thông báo **Cài đặt**. Android sẽ yêu cầu bạn xác nhận cài đè lên bản cũ. Nếu được hỏi, bật quyền cho APP NVPTTT cài ứng dụng và quay lại app để tiếp tục.
 
 ## Build từ mã nguồn
 
