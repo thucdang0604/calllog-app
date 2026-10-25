@@ -64,6 +64,8 @@ class _SimpleHomeScreenState extends State<SimpleHomeScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        leading: const _DonateCardWidget(),
+        centerTitle: false,
         title: const Text(
           'APP NVPTTT',
           style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
@@ -172,9 +174,6 @@ class _SimpleHomeScreenState extends State<SimpleHomeScreen>
 
                 // 2 cuộc gọi gần nhất (preview)
                 _buildLatestCallsPreview(provider),
-
-                // Card Donate & Ủng hộ tác giả
-                const _DonateCardWidget(),
               ],
             ),
           );
@@ -614,22 +613,10 @@ class _DonateCardWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: SizedBox(
-        width: double.infinity,
-        child: OutlinedButton.icon(
-          onPressed: () => _showDonateDialog(context),
-          icon: const Icon(Icons.coffee_outlined),
-          label: const Text('Ủng hộ tác giả (Donate)'),
-          style: OutlinedButton.styleFrom(
-            foregroundColor: Colors.orange.shade900,
-            backgroundColor: Colors.amber.shade50,
-            side: BorderSide(color: Colors.amber.shade300),
-            padding: const EdgeInsets.symmetric(vertical: 13),
-          ),
-        ),
-      ),
+    return IconButton(
+      onPressed: () => _showDonateDialog(context),
+      icon: const Icon(Icons.coffee_outlined, color: Colors.white),
+      tooltip: 'Ủng hộ tác giả (Donate)',
     );
   }
 

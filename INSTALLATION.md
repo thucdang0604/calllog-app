@@ -20,4 +20,4 @@ flutter build apk --release
 
 ## Phát hành
 
-Tăng version trong `pubspec.yaml`, build bằng cùng khóa ký hiện tại, sau đó tạo GitHub Release với tag `v<version>` (ví dụ `v1.0.7`) và đính kèm APK tên `calllog.apk`. App tự nhận ra phiên bản mới khi người dùng mở app. Không lưu keystore trong repository.
+Tăng version trong `pubspec.yaml`, build bằng cùng khóa ký hiện tại, sau đó tạo GitHub Release với tag `v<version>` (ví dụ `v1.0.8`) và đính kèm APK tên `calllog.apk`. App tự nhận ra phiên bản mới khi người dùng mở app. Không lưu keystore trong repository.
