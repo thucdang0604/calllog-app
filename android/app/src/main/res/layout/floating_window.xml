@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/floating_container"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/floating_window_background"
+    android:padding="6dp"
+    android:elevation="12dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="36dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <!-- The blank grip keeps the palette draggable without adding copy. -->
+        <LinearLayout
+            android:id="@+id/header_drag_handle"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+            <TextView
+                android:id="@+id/header_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingStart="8dp"
+                android:text="•••"
+                android:textColor="#88FFFFFF"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/batch_update_button"
+            android:layout_width="36dp"
+            android:layout_height="32dp"
+            android:minWidth="0dp"
+            android:background="@drawable/update_button_background"
+            android:padding="0dp"
+            android:text="⚡"
+            android:textColor="#FFFFFFFF"
+            android:textSize="15sp" />
+
+        <Button
+            android:id="@+id/payment_tracking_button"
+            android:layout_width="36dp"
+            android:layout_height="32dp"
+            android:layout_marginStart="4dp"
+            android:minWidth="0dp"
+            android:background="@drawable/update_button_background"
+            android:contentDescription="Chờ chuyển khoản"
+            android:padding="0dp"
+            android:text="₫"
+            android:textColor="#FFFFFFFF"
+            android:textSize="16sp" />
+
+        <ImageButton
+            android:id="@+id/quick_timemark_button"
+            android:layout_width="36dp"
+            android:layout_height="32dp"
+            android:layout_marginStart="4dp"
+            android:background="@drawable/refresh_button_background"
+            android:contentDescription="Chụp ảnh TimeMark"
+            android:padding="7dp"
+            android:src="@android:drawable/ic_menu_camera"
+            android:tint="#FFFFFFFF" />
+
+        <Button
+            android:id="@+id/toggle_panel_button"
+            android:layout_width="36dp"
+            android:layout_height="32dp"
+            android:layout_marginStart="4dp"
+            android:minWidth="0dp"
+            android:background="@drawable/refresh_button_background"
+            android:padding="0dp"
+            android:text="⌄"
+            android:textColor="#FFFFFFFF"
+            android:textSize="17sp" />
+
+        <Button
+            android:id="@+id/close_button"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:layout_marginStart="4dp"
+            android:background="@drawable/close_button_background"
+            android:padding="0dp"
+            android:text="−"
+            android:textColor="#FFFFFFFF"
+            android:textSize="18sp" />
+    </LinearLayout>
+
+    <ScrollView
+        android:id="@+id/calls_scroll_view"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:fillViewport="false"
+        android:overScrollMode="ifContentScrolls">
+        <LinearLayout
+            android:id="@+id/calls_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+    </ScrollView>
+
+    <LinearLayout
+        android:id="@+id/sms_input_container"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:visibility="gone">
+
+        <EditText
+            android:id="@+id/amount_input"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:background="@drawable/input_background"
+            android:hint="1923 = 1.923.000đ"
+            android:inputType="number"
+            android:paddingStart="10dp"
+            android:paddingEnd="6dp"
+            android:singleLine="true"
+            android:textColor="#FFFFFFFF"
+            android:textColorHint="#80FFFFFF"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/send_sms_button"
+            android:layout_width="38dp"
+            android:layout_height="40dp"
+            android:layout_marginStart="5dp"
+            android:background="@drawable/sms_button_background"
+            android:padding="0dp"
+            android:text="✓"
+            android:textColor="#FFFFFFFF"
+            android:textSize="17sp" />
+
+        <Button
+            android:id="@+id/cancel_sms_button"
+            android:layout_width="34dp"
+            android:layout_height="40dp"
+            android:layout_marginStart="4dp"
+            android:background="@drawable/close_button_background"
+            android:padding="0dp"
+            android:text="×"
+            android:textColor="#FFFFFFFF"
+            android:textSize="18sp" />
+    </LinearLayout>
+
+</LinearLayout>

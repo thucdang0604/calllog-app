@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/bubble_root"
+    android:layout_width="56dp"
+    android:layout_height="56dp"
+    android:background="@drawable/floating_bubble_background"
+    android:clickable="true"
+    android:elevation="8dp"
+    android:focusable="true">
+
+    <TextView
+        android:id="@+id/bubble_icon"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center"
+        android:text="LOG"
+        android:textColor="#FFFFFF"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:contentDescription="Mở công cụ nhanh" />
+</FrameLayout>

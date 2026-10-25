@@ -1,0 +1,28 @@
+# Flutter / Dart generated files
+.dart_tool/
+.gradle/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+
+# Android / local machine configuration and generated output
+android/.gradle/
+android/local.properties
+android/app/build/
+android/key.properties
+android/app/*.jks
+android/app/*.keystore
+
+# IDE and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Do not commit APKs. Distributable APKs are attached to GitHub Releases.
+*.apk
+*.aab
+
+# Original third-party GHN APK used for local analysis; do not redistribute.
+nhanh_taixe_2.3.35.apk

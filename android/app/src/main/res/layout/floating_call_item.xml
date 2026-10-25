@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="40dp"
+    android:layout_marginBottom="3dp"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:background="@drawable/call_item_background"
+    android:paddingStart="8dp"
+    android:paddingEnd="4dp">
+
+    <TextView
+        android:id="@+id/item_phone_number"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:ellipsize="end"
+        android:singleLine="true"
+        android:textColor="#FFFFFFFF"
+        android:textSize="11sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/item_duration"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textColor="#9CCBFF"
+        android:textSize="9sp"
+        android:layout_marginEnd="3dp"
+        android:visibility="gone" />
+
+    <Button
+        android:id="@+id/item_sms_button"
+        android:layout_width="34dp"
+        android:layout_height="32dp"
+        android:layout_marginStart="3dp"
+        android:background="@drawable/sms_button_background"
+        android:padding="0dp"
+        android:text="✉"
+        android:textColor="#FFFFFFFF"
+        android:textSize="14sp" />
+
+    <Button
+        android:id="@+id/item_update_button"
+        android:layout_width="34dp"
+        android:layout_height="32dp"
+        android:layout_marginStart="3dp"
+        android:background="@drawable/update_button_background"
+        android:padding="0dp"
+        android:text="⚡"
+        android:textColor="#FFFFFFFF"
+        android:textSize="14sp" />
+
+</LinearLayout>
