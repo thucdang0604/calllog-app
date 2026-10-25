@@ -455,12 +455,16 @@ class _PaymentReconciliationScreenState
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text(
-                            'Mã đơn: ${record.orderCode}',
-                            style: TextStyle(
-                              color: Theme.of(context).colorScheme.primary,
-                              fontWeight: FontWeight.w600,
-                              decoration: TextDecoration.underline,
+                          Flexible(
+                            child: Text(
+                              'Mã đơn: ${record.orderCode}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Theme.of(context).colorScheme.primary,
+                                fontWeight: FontWeight.w600,
+                                decoration: TextDecoration.underline,
+                              ),
                             ),
                           ),
                           const SizedBox(width: 4),
