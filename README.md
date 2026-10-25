@@ -26,8 +26,8 @@ APK được tạo tại `build/app/outputs/flutter-apk/app-release.apk`.
 
 ## Phát hành bản mới
 
-1. Tăng `version` trong `pubspec.yaml`, ví dụ `1.0.8+9`, rồi build APK bằng cùng môi trường/khoá ký hiện tại.
-2. Tạo GitHub Release với tag tương ứng (ví dụ `v1.0.8`) và đính kèm APK với tên `calllog.apk`.
+1. Tăng `version` trong `pubspec.yaml`, ví dụ `1.0.9+10`, rồi build APK bằng cùng môi trường/khoá ký hiện tại.
+2. Tạo GitHub Release với tag tương ứng (ví dụ `v1.0.9`) và đính kèm APK với tên `calllog.apk`.
 3. App sẽ phát hiện bản mới khi người dùng mở app.
 
 Giữ nguyên khóa ký hiện tại để Android cho phép cài đè lên bản cũ. Không đưa keystore vào Git.
