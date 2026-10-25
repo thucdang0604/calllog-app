@@ -6,7 +6,7 @@
 
 - **Tải APK mới nhất:** [GitHub Releases](https://github.com/thucdang0604/calllog-app/releases/latest)
 - Ứng dụng kiểm tra phiên bản khi mở app hoặc quay lại foreground, tối đa một lần mỗi giờ. Nút biểu tượng cập nhật trên thanh trên cùng cho phép kiểm tra ngay; nếu có bản mới, app hiện hộp thoại tải APK.
-- Sau khi tải, mở tệp APK và xác nhận cài đặt. Android có thể yêu cầu cho phép cài ứng dụng từ trình duyệt.
+- APK được tải ngay trong app, có thanh tiến độ; sau đó trình cài đặt Android mở để bạn xác nhận cập nhật. Android có thể hỏi cho phép APP NVPTTT cài ứng dụng từ nguồn này.
 - Dữ liệu cuộc gọi, thông tin đơn và ảnh được quản lý trên thiết bị. App chỉ gọi GitHub để kiểm tra thông tin phiên bản; không gửi dữ liệu khách hàng lên GitHub.
 
 ## Cài đặt
@@ -26,8 +26,8 @@ APK được tạo tại `build/app/outputs/flutter-apk/app-release.apk`.
 
 ## Phát hành bản mới
 
-1. Tăng `version` trong `pubspec.yaml`, ví dụ `1.0.9+10`, rồi build APK bằng cùng môi trường/khoá ký hiện tại.
-2. Tạo GitHub Release với tag tương ứng (ví dụ `v1.0.9`) và đính kèm APK với tên `calllog.apk`.
+1. Tăng `version` trong `pubspec.yaml`, ví dụ `1.1.0+11`, rồi build APK bằng cùng môi trường/khoá ký hiện tại.
+2. Tạo GitHub Release với tag tương ứng (ví dụ `v1.1.0`) và đính kèm APK với tên `calllog.apk`.
 3. App sẽ phát hiện bản mới khi người dùng mở app.
 
 Giữ nguyên khóa ký hiện tại để Android cho phép cài đè lên bản cũ. Không đưa keystore vào Git.

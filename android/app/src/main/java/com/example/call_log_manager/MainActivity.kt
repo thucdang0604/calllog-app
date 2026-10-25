@@ -3,10 +3,14 @@ package com.example.call_log_manager
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Build
+import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugins.GeneratedPluginRegistrant
 import io.flutter.plugin.common.MethodChannel
+import androidx.core.content.FileProvider
+import java.io.File
 
 class MainActivity: FlutterActivity() {
     private lateinit var eventChannel: MethodChannel
@@ -27,25 +31,66 @@ class MainActivity: FlutterActivity() {
                         result.error("VERSION_READ_FAILED", error.message, null)
                     }
                 }
-                "openUpdate" -> {
-                    val rawUrl = call.argument<String>("url")
-                    val uri = rawUrl?.let(Uri::parse)
-                    val isTrustedReleaseUrl = uri != null &&
-                        uri.scheme == "https" &&
-                        uri.host == "github.com" &&
-                        uri.path?.startsWith(
-                            "/thucdang0604/calllog-app/releases/download/"
-                        ) == true
-
-                    if (!isTrustedReleaseUrl) {
-                        result.error("INVALID_UPDATE_URL", "Đường dẫn tải không hợp lệ.", null)
+                "getUpdateApkPath" -> {
+                    val version = call.argument<String>("version")
+                        ?.filter { it.isLetterOrDigit() || it == '.' || it == '_' }
+                        .orEmpty()
+                    if (version.isBlank()) {
+                        result.error("INVALID_UPDATE_VERSION", "Phiên bản không hợp lệ.", null)
                     } else {
-                        try {
-                            startActivity(Intent(Intent.ACTION_VIEW, uri))
-                            result.success(null)
-                        } catch (error: Exception) {
-                            result.error("UPDATE_LINK_FAILED", error.message, null)
+                        val updateDirectory = File(cacheDir, "updates")
+                        if (!updateDirectory.exists() && !updateDirectory.mkdirs()) {
+                            result.error("UPDATE_CACHE_FAILED", "Không tạo được thư mục tải.", null)
+                        } else {
+                            result.success(File(updateDirectory, "calllog-$version.apk").absolutePath)
                         }
+                    }
+                }
+                "canInstallApk" -> {
+                    result.success(
+                        Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
+                            packageManager.canRequestPackageInstalls()
+                    )
+                }
+                "installUpdateApk" -> {
+                    try {
+                        val path = call.argument<String>("path")
+                            ?: throw IllegalArgumentException("Thiếu đường dẫn APK.")
+                        val updateDirectory = File(cacheDir, "updates").canonicalFile
+                        val apkFile = File(path).canonicalFile
+                        if (!apkFile.path.startsWith(updateDirectory.path + File.separator) ||
+                            !apkFile.isFile || apkFile.length() == 0L
+                        ) {
+                            throw IllegalArgumentException("Tệp APK cập nhật không hợp lệ.")
+                        }
+
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                            !packageManager.canRequestPackageInstalls()
+                        ) {
+                            startActivity(
+                                Intent(
+                                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                    Uri.parse("package:$packageName")
+                                )
+                            )
+                            result.success(false)
+                            return@setMethodCallHandler
+                        }
+
+                        val apkUri = FileProvider.getUriForFile(
+                            this,
+                            "$packageName.timemark.fileprovider",
+                            apkFile
+                        )
+                        startActivity(
+                            Intent(Intent.ACTION_VIEW).apply {
+                                setDataAndType(apkUri, "application/vnd.android.package-archive")
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            }
+                        )
+                        result.success(true)
+                    } catch (error: Exception) {
+                        result.error("APK_INSTALL_FAILED", error.message, null)
                     }
                 }
                 else -> result.notImplemented()

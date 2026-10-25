@@ -32,6 +32,7 @@ class _SimpleHomeScreenState extends State<SimpleHomeScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      _appUpdateService.resumePendingInstallation(context);
       _checkForAppUpdate(delay: false);
     }
   }
