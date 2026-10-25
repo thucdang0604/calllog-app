@@ -15,20 +15,40 @@ class SimpleHomeScreen extends StatefulWidget {
   State<SimpleHomeScreen> createState() => _SimpleHomeScreenState();
 }
 
-class _SimpleHomeScreenState extends State<SimpleHomeScreen> {
+class _SimpleHomeScreenState extends State<SimpleHomeScreen>
+    with WidgetsBindingObserver {
+  final AppUpdateService _appUpdateService = AppUpdateService();
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadCallLogs(force: false);
       _checkForAppUpdate();
     });
   }
 
-  Future<void> _checkForAppUpdate() async {
-    await Future<void>.delayed(const Duration(seconds: 3));
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkForAppUpdate(delay: false);
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  Future<void> _checkForAppUpdate({
+    bool forceCheck = false,
+    bool delay = true,
+  }) async {
+    if (delay) await Future<void>.delayed(const Duration(seconds: 3));
     if (!mounted) return;
-    await AppUpdateService().checkOnLaunch(context);
+    await _appUpdateService.checkForUpdate(context, forceCheck: forceCheck);
   }
 
   Future<void> _loadCallLogs({bool force = true}) async {
@@ -51,6 +71,11 @@ class _SimpleHomeScreenState extends State<SimpleHomeScreen> {
         backgroundColor: Colors.blue[700],
         elevation: 2,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.system_update, color: Colors.white),
+            onPressed: () => _checkForAppUpdate(forceCheck: true, delay: false),
+            tooltip: 'Kiểm tra cập nhật',
+          ),
           IconButton(
             icon: const Icon(Icons.receipt_long, color: Colors.white),
             onPressed: () {
