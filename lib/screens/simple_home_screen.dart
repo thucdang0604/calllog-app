@@ -589,174 +589,189 @@ class _DonateCardWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [Colors.amber.shade50, Colors.orange.shade50],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: SizedBox(
+        width: double.infinity,
+        child: OutlinedButton.icon(
+          onPressed: () => _showDonateDialog(context),
+          icon: const Icon(Icons.coffee_outlined),
+          label: const Text('Ủng hộ tác giả (Donate)'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: Colors.orange.shade900,
+            backgroundColor: Colors.amber.shade50,
+            side: BorderSide(color: Colors.amber.shade300),
+            padding: const EdgeInsets.symmetric(vertical: 13),
+          ),
         ),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.amber.shade200, width: 1.5),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.orange.withValues(alpha: 0.08),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
       ),
-      child: Column(
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Text('☕', style: TextStyle(fontSize: 22)),
-              const SizedBox(width: 8),
-              Text(
-                'Ủng hộ tác giả (Donate)',
-                style: TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.orange.shade900,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.8),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Text(
-              '❤️ "Nếu ứng dụng giúp công việc của bạn nhanh hơn và tiết kiệm thời gian, hãy thưởng cho tác giả một ly cà phê nhé! Sự ủng hộ của bạn là động lực lớn nhất để ứng dụng ngày càng hoàn thiện hơn."',
-              style: TextStyle(
-                fontSize: 13,
-                fontStyle: FontStyle.italic,
-                color: Colors.brown.shade800,
-                height: 1.35,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ),
-          const SizedBox(height: 14),
+    );
+  }
 
-          // QR Code Frame
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.orange.shade100),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.04),
-                  blurRadius: 6,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Image.asset(
-                'assets/images/qr_donate.png',
-                width: 220,
-                fit: BoxFit.contain,
-                errorBuilder: (context, error, stackTrace) {
-                  return Image.network(_qrUrl, width: 220, fit: BoxFit.contain);
-                },
-              ),
-            ),
+  void _showDonateDialog(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => Dialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: 400,
+            maxHeight: MediaQuery.sizeOf(dialogContext).height * 0.85,
           ),
-          const SizedBox(height: 14),
-
-          // Bank Account Info Box
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-            ),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                _buildInfoRow('Ngân hàng', _bankName, isBold: true),
-                const Divider(height: 12),
-                _buildInfoRow('Chủ tài khoản', _accountName, isBold: true),
-                const Divider(height: 12),
                 Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(
-                      'Số tài khoản',
-                      style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+                    const Text('☕', style: TextStyle(fontSize: 21)),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Ủng hộ tác giả (Donate)',
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.orange.shade900,
+                        ),
+                      ),
                     ),
-                    Row(
-                      children: [
-                        const Text(
-                          '8433 6813 825',
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.blueAccent,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        InkWell(
-                          onTap: () {
-                            Clipboard.setData(
-                              const ClipboardData(text: _accountNumber),
-                            );
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                  '📋 Đã sao chép STK 84336813825!',
-                                ),
-                                duration: Duration(seconds: 2),
-                                backgroundColor: Colors.green,
-                              ),
-                            );
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.blue.shade50,
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  Icons.copy,
-                                  size: 14,
-                                  color: Colors.blue.shade700,
-                                ),
-                                const SizedBox(width: 2),
-                                Text(
-                                  'Copy',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: Colors.blue.shade700,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
+                    IconButton(
+                      onPressed: () => Navigator.of(dialogContext).pop(),
+                      tooltip: 'Đóng',
+                      icon: const Icon(Icons.close),
                     ),
                   ],
                 ),
+                Text(
+                  'Nếu ứng dụng giúp công việc của bạn nhanh hơn, hãy thưởng '
+                  'cho tác giả một ly cà phê nhé. Cảm ơn bạn đã ủng hộ!',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontStyle: FontStyle.italic,
+                    color: Colors.brown.shade800,
+                    height: 1.35,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.orange.shade100),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.asset(
+                      'assets/images/qr_donate.png',
+                      width: 160,
+                      fit: BoxFit.contain,
+                      errorBuilder: (context, error, stackTrace) =>
+                          Image.network(
+                            _qrUrl,
+                            width: 160,
+                            fit: BoxFit.contain,
+                          ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.orange.shade100),
+                  ),
+                  child: Column(
+                    children: [
+                      _buildInfoRow('Ngân hàng', _bankName, isBold: true),
+                      const Divider(height: 12),
+                      _buildInfoRow(
+                        'Chủ tài khoản',
+                        _accountName,
+                        isBold: true,
+                      ),
+                      const Divider(height: 12),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Số tài khoản',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.grey[700],
+                            ),
+                          ),
+                          Row(
+                            children: [
+                              const Text(
+                                '8433 6813 825',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.blueAccent,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              InkWell(
+                                onTap: () {
+                                  Clipboard.setData(
+                                    const ClipboardData(text: _accountNumber),
+                                  );
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                        'Đã sao chép số tài khoản.',
+                                      ),
+                                      duration: Duration(seconds: 2),
+                                      backgroundColor: Colors.green,
+                                    ),
+                                  );
+                                },
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.blue.shade50,
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        Icons.copy,
+                                        size: 14,
+                                        color: Colors.blue.shade700,
+                                      ),
+                                      const SizedBox(width: 2),
+                                      Text(
+                                        'Copy',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: Colors.blue.shade700,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }
