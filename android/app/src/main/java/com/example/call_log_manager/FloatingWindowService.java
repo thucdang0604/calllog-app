@@ -79,9 +79,12 @@ public class FloatingWindowService extends Service {
 
     private LinearLayout floatingContainer;
     private LinearLayout callsContainer;
+    private LinearLayout paymentQueueFilter;
     private ScrollView callsScrollView;
     private Button batchUpdateButton;
     private Button paymentTrackingButton;
+    private TextView paymentPendingTab;
+    private TextView paymentReceivedTab;
     private LinearLayout smsInputContainer;
     private EditText amountInput;
     private Button sendSmsButton, cancelSmsButton;
@@ -110,6 +113,7 @@ public class FloatingWindowService extends Service {
     private boolean bubbleMode = true;
     private boolean panelExpanded = false;
     private boolean paymentQueueMode = false;
+    private boolean paymentQueueShowingReceived = false;
 
     // === PhoneStateListener: chủ động phát hiện kết thúc cuộc gọi ===
     private TelephonyManager telephonyManager;
@@ -271,20 +275,23 @@ public class FloatingWindowService extends Service {
     }
 
     private int getPanelWidth() {
-        // A panel never extends to the display edges, including on 320dp devices.
-        return Math.max(dp(204), Math.min(dp(232), getAvailableScreenWidth() - dp(20)));
+        // Keep the panel compact on narrow displays while leaving enough room for row actions.
+        int widthLimit = Math.min(dp(216), getAvailableScreenWidth() - dp(16));
+        int proportionalWidth = (int) (getAvailableScreenWidth() * 0.62f);
+        return Math.max(dp(184), Math.min(widthLimit, proportionalWidth));
     }
 
     private int getCallListHeight() {
         final int screenHeight = getAvailableScreenHeight();
-        final float ratio = panelExpanded ? 0.25f : 0.15f;
-        final int minHeight = dp(panelExpanded ? 122 : 82);
-        final int maxHeight = dp(panelExpanded ? 130 : 86);
+        final float ratio = panelExpanded ? 0.19f : 0.12f;
+        final int minHeight = dp(panelExpanded ? 96 : 70);
+        final int maxHeight = dp(panelExpanded ? 112 : 76);
         return Math.max(minHeight, Math.min(maxHeight, (int) (screenHeight * ratio)));
     }
 
     private int getPaymentQueueHeight() {
-        return Math.max(getCallListHeight(), Math.min(dp(220), getAvailableScreenHeight() / 3));
+        int screenBasedHeight = (int) (getAvailableScreenHeight() * 0.25f);
+        return Math.max(dp(88), Math.min(dp(148), screenBasedHeight));
     }
 
     private int getOverlayCallCount() {
@@ -606,7 +613,10 @@ public class FloatingWindowService extends Service {
         mainHandler.removeCallbacks(debouncedCallRefresh);
         callsContainer = null;
         callsScrollView = null;
+        paymentQueueFilter = null;
         paymentTrackingButton = null;
+        paymentPendingTab = null;
+        paymentReceivedTab = null;
         currentCallHolders.clear();
 
         try {
@@ -636,8 +646,27 @@ public class FloatingWindowService extends Service {
         floatingContainer = floatingView.findViewById(R.id.floating_container);
         callsContainer = floatingView.findViewById(R.id.calls_container);
         callsScrollView = floatingView.findViewById(R.id.calls_scroll_view);
+        paymentQueueFilter = floatingView.findViewById(R.id.payment_queue_filter);
+        paymentPendingTab = floatingView.findViewById(R.id.payment_pending_tab);
+        paymentReceivedTab = floatingView.findViewById(R.id.payment_received_tab);
         batchUpdateButton = floatingView.findViewById(R.id.batch_update_button);
         paymentTrackingButton = floatingView.findViewById(R.id.payment_tracking_button);
+
+        if (paymentPendingTab != null) {
+            paymentPendingTab.setOnClickListener(v -> {
+                paymentQueueShowingReceived = false;
+                renderPaymentQueue();
+            });
+        }
+        if (paymentReceivedTab != null) {
+            paymentReceivedTab.setOnClickListener(v -> {
+                paymentQueueShowingReceived = true;
+                renderPaymentQueue();
+            });
+        }
+        if (paymentQueueFilter != null && !paymentQueueMode) {
+            paymentQueueFilter.setVisibility(View.GONE);
+        }
 
         // SMS controls
         smsInputContainer = floatingView.findViewById(R.id.sms_input_container);
@@ -714,8 +743,10 @@ public class FloatingWindowService extends Service {
         unregisterCallLogObserver();
         mainHandler.removeCallbacks(debouncedCallRefresh);
         paymentQueueMode = true;
+        paymentQueueShowingReceived = false;
         currentCallHolders.clear();
         callsContainer.removeAllViews();
+        if (paymentQueueFilter != null) paymentQueueFilter.setVisibility(View.VISIBLE);
         if (callsScrollView != null) {
             callsScrollView.getLayoutParams().height = getPaymentQueueHeight();
             callsScrollView.setVisibility(View.VISIBLE);
@@ -729,6 +760,8 @@ public class FloatingWindowService extends Service {
     private void showCallListInPanel() {
         if (floatingView == null || bubbleMode || callsContainer == null) return;
         paymentQueueMode = false;
+        paymentQueueShowingReceived = false;
+        if (paymentQueueFilter != null) paymentQueueFilter.setVisibility(View.GONE);
         registerCallLogObserver();
         currentCallHolders.clear();
         callsContainer.removeAllViews();
@@ -744,23 +777,32 @@ public class FloatingWindowService extends Service {
             callsScrollView.getLayoutParams().height = getPaymentQueueHeight();
             callsScrollView.requestLayout();
         }
+        if (paymentQueueFilter != null) paymentQueueFilter.setVisibility(View.VISIBLE);
 
         JSONArray records = PaymentTrackingStore.getRecords(this);
         int pendingCount = 0;
+        int receivedCount = 0;
         for (int index = records.length() - 1; index >= 0; index--) {
             JSONObject record = records.optJSONObject(index);
-            if (record == null
-                || !"sent".equals(record.optString("smsStatus"))
-                || "received".equals(record.optString("status"))) {
-                continue;
+            if (record == null || !"sent".equals(record.optString("smsStatus"))) continue;
+
+            boolean received = "received".equals(record.optString("status"));
+            if (received) receivedCount++;
+            else pendingCount++;
+
+            if (received == paymentQueueShowingReceived) {
+                addPaymentQueueRow(record, received);
             }
-            pendingCount++;
-            addPaymentQueueRow(record);
         }
 
-        if (pendingCount == 0) {
+        updatePaymentQueueTabs(pendingCount, receivedCount);
+
+        int visibleCount = paymentQueueShowingReceived ? receivedCount : pendingCount;
+        if (visibleCount == 0) {
             TextView emptyView = new TextView(this);
-            emptyView.setText("Không có khoản chờ chuyển khoản");
+            emptyView.setText(paymentQueueShowingReceived
+                ? "Chưa có khoản đã nhận"
+                : "Không có khoản chờ chuyển khoản");
             emptyView.setTextColor(0xFF666666);
             emptyView.setTextSize(11);
             emptyView.setGravity(Gravity.CENTER);
@@ -770,10 +812,29 @@ public class FloatingWindowService extends Service {
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ));
         }
+        if (callsScrollView != null) callsScrollView.scrollTo(0, 0);
         floatingView.post(this::keepOverlayOnScreen);
     }
 
-    private void addPaymentQueueRow(JSONObject record) {
+    private void updatePaymentQueueTabs(int pendingCount, int receivedCount) {
+        if (paymentPendingTab != null) {
+            paymentPendingTab.setText("Chờ (" + pendingCount + ")");
+            stylePaymentQueueTab(paymentPendingTab, !paymentQueueShowingReceived);
+        }
+        if (paymentReceivedTab != null) {
+            paymentReceivedTab.setText("Đã nhận (" + receivedCount + ")");
+            stylePaymentQueueTab(paymentReceivedTab, paymentQueueShowingReceived);
+        }
+    }
+
+    private void stylePaymentQueueTab(TextView tab, boolean selected) {
+        tab.setBackgroundColor(selected ? 0xFF1565C0 : 0xFFE8E8E8);
+        tab.setTextColor(selected ? 0xFFFFFFFF : 0xFF444444);
+        tab.setContentDescription((selected ? "Đang xem " : "Mở danh sách ")
+            + tab.getText().toString());
+    }
+
+    private void addPaymentQueueRow(JSONObject record, boolean received) {
         String id = record.optString("id", "");
         String phone = record.optString("phone", "");
         String digits = phone.replaceAll("\\D", "");
@@ -798,25 +859,10 @@ public class FloatingWindowService extends Service {
             orderView.setPaintFlags(
                 orderView.getPaintFlags() | android.graphics.Paint.UNDERLINE_TEXT_FLAG
             );
-            orderView.setContentDescription("Sao chép mã vận đơn " + orderCode);
-            orderView.setOnClickListener(v -> {
-                ClipboardManager clipboard =
-                    (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-                if (clipboard == null) {
-                    Toast.makeText(
-                        FloatingWindowService.this,
-                        "Không sao chép được mã vận đơn.",
-                        Toast.LENGTH_SHORT
-                    ).show();
-                    return;
-                }
-                clipboard.setPrimaryClip(ClipData.newPlainText("Mã vận đơn", orderCode));
-                Toast.makeText(
-                    FloatingWindowService.this,
-                    "Đã sao chép mã vận đơn " + orderCode,
-                    Toast.LENGTH_SHORT
-                ).show();
-            });
+            orderView.setContentDescription("Mở tra cứu GHN cho mã vận đơn " + orderCode
+                + ". Nhấn giữ để sao chép mã.");
+            orderView.setOnClickListener(v -> openGhnTracking(orderCode));
+            orderView.setOnLongClickListener(v -> copyOrderCode(orderCode));
         }
 
         LinearLayout actionRow = new LinearLayout(this);
@@ -833,23 +879,27 @@ public class FloatingWindowService extends Service {
         detailsView.setEllipsize(android.text.TextUtils.TruncateAt.END);
 
         Button receivedButton = new Button(this);
-        receivedButton.setText("✓ Nhận");
+        receivedButton.setText(received ? "↩ Chờ" : "✓ Nhận");
         receivedButton.setTextSize(10);
+        receivedButton.setContentDescription(received
+            ? "Chuyển khoản này về trạng thái đang chờ"
+            : "Đánh dấu khoản chuyển khoản đã nhận");
         receivedButton.setMinWidth(0);
         receivedButton.setMinimumWidth(0);
         receivedButton.setMinHeight(0);
         receivedButton.setMinimumHeight(0);
         receivedButton.setPadding(dp(6), 0, dp(6), 0);
         receivedButton.setOnClickListener(v -> {
-            if (PaymentTrackingStore.setReceived(FloatingWindowService.this, id, true)) {
+            if (PaymentTrackingStore.setReceived(FloatingWindowService.this, id, !received)) {
+                PaymentTrackingEventBus.notifyRecordsChanged();
                 renderPaymentQueue();
             }
         });
 
-        actionRow.addView(detailsView, new LinearLayout.LayoutParams(0, dp(34), 1f));
+        actionRow.addView(detailsView, new LinearLayout.LayoutParams(0, dp(30), 1f));
         actionRow.addView(receivedButton, new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT,
-            dp(34)
+            dp(30)
         ));
         row.addView(orderView, new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
@@ -857,9 +907,11 @@ public class FloatingWindowService extends Service {
         ));
         row.addView(actionRow, new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
-            dp(34)
+            dp(30)
         ));
-        row.setBackgroundColor(customerReplied ? 0xFFE3F2FD : 0xFFF4F4F4);
+        row.setBackgroundColor(received
+            ? 0xFFE8F5E9
+            : (customerReplied ? 0xFFE3F2FD : 0xFFF4F4F4));
 
         LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
@@ -867,6 +919,31 @@ public class FloatingWindowService extends Service {
         );
         rowParams.setMargins(0, 0, 0, dp(3));
         callsContainer.addView(row, rowParams);
+    }
+
+    private void openGhnTracking(String orderCode) {
+        if (orderCode == null || orderCode.trim().isEmpty()) return;
+        try {
+            Uri trackingUri = Uri.parse("https://donhang.ghn.vn/?order_code="
+                + Uri.encode(orderCode.trim()));
+            Intent intent = new Intent(Intent.ACTION_VIEW, trackingUri);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+            startActivity(intent);
+        } catch (Exception e) {
+            Log.e(TAG, "Could not open GHN tracking page", e);
+            Toast.makeText(this, "Không mở được trang tra cứu GHN", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private boolean copyOrderCode(String orderCode) {
+        ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (clipboard == null) {
+            Toast.makeText(this, "Không sao chép được mã vận đơn.", Toast.LENGTH_SHORT).show();
+            return true;
+        }
+        clipboard.setPrimaryClip(ClipData.newPlainText("Mã vận đơn", orderCode));
+        Toast.makeText(this, "Đã sao chép mã vận đơn " + orderCode, Toast.LENGTH_SHORT).show();
+        return true;
     }
 
     private void openTimeMarkCamera() {
