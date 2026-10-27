@@ -859,10 +859,13 @@ public class FloatingWindowService extends Service {
             orderView.setPaintFlags(
                 orderView.getPaintFlags() | android.graphics.Paint.UNDERLINE_TEXT_FLAG
             );
-            orderView.setContentDescription("Mở ứng dụng GHN cho mã vận đơn " + orderCode
-                + ". Nhấn giữ để sao chép mã.");
-            orderView.setOnClickListener(v -> openGhnTracking(orderCode));
-            orderView.setOnLongClickListener(v -> copyOrderCode(orderCode));
+            orderView.setContentDescription("Sao chép mã vận đơn " + orderCode
+                + ". Nhấn giữ để mở ứng dụng GHN.");
+            orderView.setOnClickListener(v -> copyOrderCode(orderCode));
+            orderView.setOnLongClickListener(v -> {
+                openGhnTracking(orderCode);
+                return true;
+            });
         }
 
         LinearLayout actionRow = new LinearLayout(this);
