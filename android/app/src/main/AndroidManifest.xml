@@ -118,6 +118,7 @@
     </application>
     
     <queries>
+        <package android:name="com.mpds" />
         <intent>
             <action android:name="android.intent.action.CALL" />
             <data android:scheme="tel" />

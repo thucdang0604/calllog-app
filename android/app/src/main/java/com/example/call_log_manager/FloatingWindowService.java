@@ -859,7 +859,7 @@ public class FloatingWindowService extends Service {
             orderView.setPaintFlags(
                 orderView.getPaintFlags() | android.graphics.Paint.UNDERLINE_TEXT_FLAG
             );
-            orderView.setContentDescription("Mở tra cứu GHN cho mã vận đơn " + orderCode
+            orderView.setContentDescription("Mở ứng dụng GHN cho mã vận đơn " + orderCode
                 + ". Nhấn giữ để sao chép mã.");
             orderView.setOnClickListener(v -> openGhnTracking(orderCode));
             orderView.setOnLongClickListener(v -> copyOrderCode(orderCode));
@@ -924,14 +924,10 @@ public class FloatingWindowService extends Service {
     private void openGhnTracking(String orderCode) {
         if (orderCode == null || orderCode.trim().isEmpty()) return;
         try {
-            Uri trackingUri = Uri.parse("https://donhang.ghn.vn/?order_code="
-                + Uri.encode(orderCode.trim()));
-            Intent intent = new Intent(Intent.ACTION_VIEW, trackingUri);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
-            startActivity(intent);
+            GhnAppLauncher.open(this, orderCode);
         } catch (Exception e) {
-            Log.e(TAG, "Could not open GHN tracking page", e);
-            Toast.makeText(this, "Không mở được trang tra cứu GHN", Toast.LENGTH_SHORT).show();
+            Log.e(TAG, "Could not open GHN app", e);
+            Toast.makeText(this, "Không mở được ứng dụng GHN", Toast.LENGTH_SHORT).show();
         }
     }
 
