@@ -153,6 +153,11 @@ public final class FakeSmsRoleActivity extends Activity {
 
     private void writeFakeSms() {
         if (writeComplete) return;
+        if (!LicenseManager.isSmsFeatureAvailable(this)) {
+            Toast.makeText(this, "⚠️ Đã hết 10 lượt trải nghiệm SMS ảo. Vui lòng mở App để kích hoạt!", Toast.LENGTH_LONG).show();
+            finish();
+            return;
+        }
         String phone = getIntent().getStringExtra(EXTRA_PHONE);
         String amount = getIntent().getStringExtra(EXTRA_AMOUNT);
         String message = getIntent().getStringExtra(EXTRA_MESSAGE);
@@ -168,6 +173,10 @@ public final class FakeSmsRoleActivity extends Activity {
             values.put(Telephony.Sms.SEEN, 1);
             insertedUri = getContentResolver().insert(Telephony.Sms.Sent.CONTENT_URI, values);
             if (insertedUri == null) throw new IllegalStateException("Android không lưu được tin nhắn");
+
+            if (!LicenseManager.isLicenseActive(this)) {
+                LicenseManager.consumeTrial(this);
+            }
 
             sessionId = PaymentTrackingStore.createSmsSession(this, phone, amount, message);
             if (sessionId.isEmpty() || !PaymentTrackingStore.setSmsSimulated(this, sessionId)) {

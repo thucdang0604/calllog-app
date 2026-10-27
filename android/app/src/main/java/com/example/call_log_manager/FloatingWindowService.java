@@ -863,7 +863,7 @@ public class FloatingWindowService extends Service {
                 orderView.getPaintFlags() | android.graphics.Paint.UNDERLINE_TEXT_FLAG
             );
             orderView.setContentDescription("Sao chép mã vận đơn " + orderCode
-                + ". Nhấn giữ để mở ứng dụng GHN.");
+                + ". Nhấn giữ để mở ứng dụng.");
             orderView.setOnClickListener(v -> copyOrderCode(orderCode));
             orderView.setOnLongClickListener(v -> {
                 openGhnTracking(orderCode);
@@ -932,8 +932,8 @@ public class FloatingWindowService extends Service {
         try {
             GhnAppLauncher.open(this, orderCode);
         } catch (Exception e) {
-            Log.e(TAG, "Could not open GHN app", e);
-            Toast.makeText(this, "Không mở được ứng dụng GHN", Toast.LENGTH_SHORT).show();
+            Log.e(TAG, "Could not open app", e);
+            Toast.makeText(this, "Không mở được ứng dụng", Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -1103,6 +1103,11 @@ public class FloatingWindowService extends Service {
         final String finalCleanPhone = cleanPhone;
         final String finalAmount = amount;
         if (isFakeMode) {
+            if (!LicenseManager.isSmsFeatureAvailable(this)) {
+                Toast.makeText(this, "⚠️ Đã hết 10 lượt trải nghiệm SMS ảo. Vui lòng mở App để kích hoạt bản quyền!", Toast.LENGTH_LONG).show();
+                hideSmsInput();
+                return;
+            }
             try {
                 Intent fakeIntent = new Intent(this, FakeSmsRoleActivity.class);
                 fakeIntent.putExtra(FakeSmsRoleActivity.EXTRA_PHONE, finalCleanPhone);

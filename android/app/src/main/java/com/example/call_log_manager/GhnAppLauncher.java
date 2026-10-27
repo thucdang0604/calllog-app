@@ -25,7 +25,7 @@ final class GhnAppLauncher {
         if (launchIntent == null) {
             Toast.makeText(
                 context,
-                "Đã sao chép mã " + code + ". Chưa tìm thấy ứng dụng GHN.",
+                "Đã sao chép mã " + code + ". Chưa tìm thấy ứng dụng.",
                 Toast.LENGTH_LONG
             ).show();
             return false;
@@ -35,7 +35,7 @@ final class GhnAppLauncher {
         context.startActivity(launchIntent);
         Toast.makeText(
             context,
-            "Đã sao chép mã " + code + ". Dán mã vào ô tìm kiếm trong GHN.",
+            "Đã sao chép mã " + code + ". Dán mã vào ô tìm kiếm trong.",
             Toast.LENGTH_LONG
         ).show();
         return true;

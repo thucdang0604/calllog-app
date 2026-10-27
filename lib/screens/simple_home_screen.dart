@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -360,6 +361,7 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget> {
   bool _hasIncomingSmsPermission = false;
   bool _isSmsFakeMode = false;
   bool _isAutoFakeSmsIntent = false;
+  Map<String, dynamic>? _licenseDetails;
   bool _isLoading = true;
 
   @override
@@ -379,6 +381,16 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget> {
       final bool smsFakeMode = await channel.invokeMethod('getSmsFakeMode');
       final bool autoFakeIntent =
           await channel.invokeMethod('getAutoFakeSmsIntent') ?? false;
+
+      Map<String, dynamic>? licenseInfo;
+      try {
+        final String? licenseStr =
+            await channel.invokeMethod<String>('getSmsLicenseDetails');
+        if (licenseStr != null && licenseStr.isNotEmpty) {
+          licenseInfo = jsonDecode(licenseStr) as Map<String, dynamic>;
+        }
+      } catch (_) {}
+
       if (mounted) {
         setState(() {
           _controller.text = template;
@@ -386,6 +398,7 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget> {
           _hasIncomingSmsPermission = hasIncomingPerm;
           _isSmsFakeMode = smsFakeMode;
           _isAutoFakeSmsIntent = autoFakeIntent;
+          _licenseDetails = licenseInfo;
           _isLoading = false;
         });
       }
@@ -477,6 +490,14 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget> {
   }
 
   Future<void> _toggleSmsFakeMode(bool enabled) async {
+    if (enabled && _licenseDetails != null) {
+      final bool isLicensed = _licenseDetails!['isLicensed'] == true;
+      final int remaining = _licenseDetails!['remainingTrial'] as int? ?? 0;
+      if (!isLicensed && remaining <= 0) {
+        _showLicenseModal();
+        return;
+      }
+    }
     try {
       const channel = MethodChannel('call_log_manager');
       final saved = await channel.invokeMethod<bool>('setSmsFakeMode', {
@@ -506,6 +527,14 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget> {
   }
 
   Future<void> _toggleAutoFakeSmsIntent(bool enabled) async {
+    if (enabled && _licenseDetails != null) {
+      final bool isLicensed = _licenseDetails!['isLicensed'] == true;
+      final int remaining = _licenseDetails!['remainingTrial'] as int? ?? 0;
+      if (!isLicensed && remaining <= 0) {
+        _showLicenseModal();
+        return;
+      }
+    }
     try {
       const channel = MethodChannel('call_log_manager');
       final saved = await channel.invokeMethod<bool>('setAutoFakeSmsIntent', {
@@ -518,8 +547,8 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget> {
           SnackBar(
             content: Text(
               enabled
-                  ? '⚡ Đã bật tự động tạo SMS ảo và đóng ngay khi bấm từ GHN'
-                  : 'Đã chuyển sang hiện hộp thoại xác nhận khi bấm từ GHN',
+                  ? '⚡ Đã bật tự động tạo SMS ảo và đóng ngay khi bấm từ APP'
+                  : 'Đã chuyển sang hiện hộp thoại xác nhận khi bấm từ APP',
             ),
             backgroundColor: enabled ? Colors.green[700] : Colors.grey[700],
             duration: const Duration(seconds: 2),
@@ -532,6 +561,381 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget> {
         SnackBar(content: Text('Không đổi được cài đặt: $error')),
       );
     }
+  }
+
+  void _showLicenseModal() {
+    final TextEditingController keyCtrl = TextEditingController();
+    final String devId = _licenseDetails?['deviceId'] ?? 'SMS-XXXX-XXXX';
+    final bool isLicensed = _licenseDetails?['isLicensed'] == true;
+    final int remainingTrial = _licenseDetails?['remainingTrial'] as int? ?? 0;
+    final String cleanDev = devId.replaceAll('SMS-', '').replaceAll('-', '');
+    final String transferContent = 'SMS $cleanDev';
+    final String qrUrl =
+        'https://img.vietqr.io/image/970407-19034108972011-compact2.png?amount=50000&addInfo=SMS%20$cleanDev&accountName=Dang%20Tri%20Thuc';
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            return Container(
+              padding: EdgeInsets.only(
+                left: 16,
+                right: 16,
+                top: 20,
+                bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
+              ),
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 40,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: Colors.grey[300],
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.verified_user,
+                          color: isLicensed
+                              ? Colors.green[700]
+                              : Colors.orange[800],
+                          size: 26,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          isLicensed
+                              ? 'Bản Quyền Đã Kích Hoạt'
+                              : 'Nâng Cấp Bản Quyền SMS Ảo',
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+
+                    // Device ID Box
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[100],
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.grey[300]!),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'MÃ THIẾT BỊ (CỐ ĐỊNH PHẦN CỨNG):',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.grey,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  devId,
+                                  style: const TextStyle(
+                                    fontSize: 17,
+                                    fontWeight: FontWeight.bold,
+                                    letterSpacing: 1,
+                                    fontFamily: 'monospace',
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.copy, size: 20),
+                            onPressed: () {
+                              Clipboard.setData(ClipboardData(text: devId));
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(' Đã sao chép mã thiết bị!'),
+                                  duration: Duration(seconds: 2),
+                                ),
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    if (!isLicensed) ...[
+                      const SizedBox(height: 14),
+                      Text(
+                        remainingTrial > 0
+                            ? '⚡ Trải nghiệm miễn phí: Còn $remainingTrial/10 tin nhắn.'
+                            : '⚠️ Đã sử dụng hết 10 lượt trải nghiệm miễn phí.',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: remainingTrial > 0
+                              ? Colors.orange[800]
+                              : Colors.red[700],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+
+                      // Phương án 1: VietQR Auto
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.green.withValues(alpha: 0.06),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: Colors.green.withValues(alpha: 0.3),
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.green[700],
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: const Text(
+                                    'PHƯƠNG ÁN 1',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                const Text(
+                                  'Quét Mã VietQR Chuyển Khoản',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            Center(
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: Image.network(
+                                  qrUrl,
+                                  width: 190,
+                                  height: 190,
+                                  fit: BoxFit.contain,
+                                  errorBuilder:
+                                      (_, __, ___) =>
+                                          const Text('Không tải được ảnh QR'),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              '• Ngân hàng: Techcombank\n• STK: 19034108972011 (DANG TRI THUC)\n• Số tiền: 50.000đ\n• Nội dung: $transferContent',
+                              style: const TextStyle(fontSize: 12, height: 1.4),
+                            ),
+                            const SizedBox(height: 6),
+                            OutlinedButton.icon(
+                              onPressed: () {
+                                Clipboard.setData(
+                                  ClipboardData(text: transferContent),
+                                );
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      ' Đã sao chép nội dung: $transferContent',
+                                    ),
+                                    duration: const Duration(seconds: 2),
+                                  ),
+                                );
+                              },
+                              icon: const Icon(Icons.copy, size: 16),
+                              label: const Text('Sao chép nội dung CK'),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      const SizedBox(height: 14),
+                      // Phương án 2: Nhập mã offline
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[50],
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.grey[300]!),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.grey[700],
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: const Text(
+                                    'PHƯƠNG ÁN 2 (DỰ PHÒNG)',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                const Text(
+                                  'Nhập Mã Kích Hoạt Thủ Công',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            TextField(
+                              controller: keyCtrl,
+                              textCapitalization: TextCapitalization.characters,
+                              decoration: const InputDecoration(
+                                hintText: 'VD: NV1-PERM-00000000-XXXXXXXX',
+                                border: OutlineInputBorder(),
+                                contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 8,
+                                ),
+                              ),
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontFamily: 'monospace',
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.green[700],
+                                  foregroundColor: Colors.white,
+                                ),
+                                onPressed: () async {
+                                  final key = keyCtrl.text.trim();
+                                  if (key.isEmpty) return;
+                                  const channel = MethodChannel(
+                                    'call_log_manager',
+                                  );
+                                  final bool? ok = await channel
+                                      .invokeMethod<bool>(
+                                        'activateSmsLicense',
+                                        {'key': key},
+                                      );
+                                  if (ok == true) {
+                                    if (context.mounted) {
+                                      Navigator.pop(ctx);
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                            '🎉 Kích hoạt bản quyền thành công!',
+                                          ),
+                                          backgroundColor: Colors.green,
+                                        ),
+                                      );
+                                      _loadConfig();
+                                    }
+                                  } else {
+                                    if (context.mounted) {
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                            '❌ Mã kích hoạt không hợp lệ cho thiết bị này!',
+                                          ),
+                                          backgroundColor: Colors.red,
+                                        ),
+                                      );
+                                    }
+                                  }
+                                },
+                                icon: const Icon(Icons.key, size: 18),
+                                label: const Text('KÍCH HOẠT BẰNG MÃ'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ] else ...[
+                      const SizedBox(height: 16),
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: Colors.green.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.green),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Gói bản quyền: ${_licenseDetails?['plan'] ?? ''}',
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Hạn dùng: ${_licenseDetails?['expiresAtFormatted'] ?? 'Vĩnh viễn'}',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.green[800],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   @override
@@ -576,6 +980,133 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget> {
             ],
           ),
           const SizedBox(height: 12),
+
+          // === Banner Bản Quyền / Trải Nghiệm ===
+          Builder(
+            builder: (context) {
+              final bool isLicensed = _licenseDetails?['isLicensed'] == true;
+              final int remaining =
+                  _licenseDetails?['remainingTrial'] as int? ?? 0;
+              final String plan = _licenseDetails?['plan'] ?? '';
+              final String expires =
+                  _licenseDetails?['expiresAtFormatted'] ?? 'Vĩnh viễn';
+
+              if (isLicensed) {
+                return InkWell(
+                  onTap: _showLicenseModal,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.green.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: Colors.green.withValues(alpha: 0.4),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.verified,
+                          color: Colors.green[700],
+                          size: 18,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Bản quyền: ĐÃ KÍCH HOẠT ($plan - $expires)',
+                            style: TextStyle(
+                              color: Colors.green[800],
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        Icon(
+                          Icons.chevron_right,
+                          color: Colors.green[700],
+                          size: 18,
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }
+
+              return InkWell(
+                onTap: _showLicenseModal,
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: remaining > 0
+                        ? Colors.orange.withValues(alpha: 0.1)
+                        : Colors.red.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: remaining > 0
+                          ? Colors.orange.withValues(alpha: 0.5)
+                          : Colors.red.withValues(alpha: 0.5),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        remaining > 0 ? Icons.bolt : Icons.lock,
+                        color: remaining > 0
+                            ? Colors.orange[800]
+                            : Colors.red[800],
+                        size: 18,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          remaining > 0
+                              ? 'Trải nghiệm SMS ảo: Còn $remaining/10 tin'
+                              : 'Đã hết 10 lượt trải nghiệm miễn phí',
+                          style: TextStyle(
+                            color: remaining > 0
+                                ? Colors.orange[900]
+                                : Colors.red[900],
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: remaining > 0
+                              ? Colors.orange[800]
+                              : Colors.red[700],
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Text(
+                          'NÂNG CẤP',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
 
           // === Toggle SMS Ảo ===
           Container(
@@ -661,7 +1192,7 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget> {
             ),
           ),
 
-          // === Toggle Tự động tạo SMS ảo từ GHN ===
+          // === Toggle Tự động tạo SMS ảo từ APP ===
           const SizedBox(height: 8),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -694,7 +1225,7 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget> {
                         children: [
                           Flexible(
                             child: Text(
-                              'Tự tạo SMS ảo từ GHN',
+                              'Tự tạo SMS ảo từ APP',
                               style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
@@ -730,7 +1261,7 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget> {
                       const SizedBox(height: 2),
                       Text(
                         _isAutoFakeSmsIntent
-                            ? 'Bấm icon tin nhắn trong GHN sẽ tự ghi vào Đã gửi và đóng ngay'
+                            ? 'Bấm icon tin nhắn trong app sẽ tự ghi vào Đã gửi và đóng ngay'
                             : 'Hiện popup để chọn Tạo SMS ảo hoặc Gửi thật qua SIM',
                         style: TextStyle(fontSize: 11, color: Colors.grey[600]),
                       ),

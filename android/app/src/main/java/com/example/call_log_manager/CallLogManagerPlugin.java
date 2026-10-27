@@ -229,6 +229,16 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
                 setAutoFakeSmsIntent(call, result);
                 break;
 
+            case "getSmsLicenseDetails":
+                getSmsLicenseDetails(result);
+                break;
+            case "activateSmsLicense":
+                activateSmsLicense(call, result);
+                break;
+            case "getDeviceId":
+                getDeviceId(result);
+                break;
+
             default:
                 result.notImplemented();
                 break;
@@ -684,6 +694,29 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
         } else {
             result.success(false);
         }
+    }
+
+    private void getSmsLicenseDetails(Result result) {
+        try {
+            org.json.JSONObject details = LicenseManager.getLicenseDetails(context);
+            result.success(details.toString());
+        } catch (Exception e) {
+            result.error("LICENSE_ERROR", e.getMessage(), null);
+        }
+    }
+
+    private void activateSmsLicense(MethodCall call, Result result) {
+        String key = call.argument("key");
+        if (key != null && !key.isEmpty()) {
+            boolean success = LicenseManager.activateKey(context, key);
+            result.success(success);
+        } else {
+            result.success(false);
+        }
+    }
+
+    private void getDeviceId(Result result) {
+        result.success(LicenseManager.getDeviceId(context));
     }
 
     private void hasSmsPermission(Result result) {

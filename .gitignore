@@ -26,3 +26,7 @@ Thumbs.db
 
 # Original third-party GHN APK used for local analysis; do not redistribute.
 nhanh_taixe_2.3.35.apk
+
+# License generator and secret tools (keep strictly local)
+license_generator.html
+*.html
