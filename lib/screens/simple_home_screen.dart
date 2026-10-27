@@ -359,6 +359,7 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget> {
   bool _hasSmsPermission = false;
   bool _hasIncomingSmsPermission = false;
   bool _isSmsFakeMode = false;
+  bool _isAutoFakeSmsIntent = false;
   bool _isLoading = true;
 
   @override
@@ -376,12 +377,15 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget> {
         'hasIncomingSmsPermission',
       );
       final bool smsFakeMode = await channel.invokeMethod('getSmsFakeMode');
+      final bool autoFakeIntent =
+          await channel.invokeMethod('getAutoFakeSmsIntent') ?? false;
       if (mounted) {
         setState(() {
           _controller.text = template;
           _hasSmsPermission = hasPerm;
           _hasIncomingSmsPermission = hasIncomingPerm;
           _isSmsFakeMode = smsFakeMode;
+          _isAutoFakeSmsIntent = autoFakeIntent;
           _isLoading = false;
         });
       }
@@ -497,6 +501,35 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Không đổi được chế độ SMS: $error')),
+      );
+    }
+  }
+
+  Future<void> _toggleAutoFakeSmsIntent(bool enabled) async {
+    try {
+      const channel = MethodChannel('call_log_manager');
+      final saved = await channel.invokeMethod<bool>('setAutoFakeSmsIntent', {
+        'enabled': enabled,
+      });
+      if (saved != true) throw StateError('Không lưu được cài đặt');
+      if (mounted) {
+        setState(() => _isAutoFakeSmsIntent = enabled);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              enabled
+                  ? '⚡ Đã bật tự động tạo SMS ảo và đóng ngay khi bấm từ GHN'
+                  : 'Đã chuyển sang hiện hộp thoại xác nhận khi bấm từ GHN',
+            ),
+            backgroundColor: enabled ? Colors.green[700] : Colors.grey[700],
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Không đổi được cài đặt: $error')),
       );
     }
   }
@@ -623,6 +656,91 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget> {
                   value: _isSmsFakeMode,
                   onChanged: _toggleSmsFakeMode,
                   activeColor: Colors.deepOrange,
+                ),
+              ],
+            ),
+          ),
+
+          // === Toggle Tự động tạo SMS ảo từ GHN ===
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: _isAutoFakeSmsIntent
+                  ? Colors.green.withValues(alpha: 0.08)
+                  : Colors.grey.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: _isAutoFakeSmsIntent
+                    ? Colors.green.withValues(alpha: 0.4)
+                    : Colors.grey.withValues(alpha: 0.2),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.bolt,
+                  color: _isAutoFakeSmsIntent
+                      ? Colors.green[700]
+                      : Colors.grey[600],
+                  size: 22,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              'Tự tạo SMS ảo từ GHN',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: _isAutoFakeSmsIntent
+                                    ? Colors.green[800]
+                                    : Colors.grey[800],
+                              ),
+                            ),
+                          ),
+                          if (_isAutoFakeSmsIntent) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 1,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.green[700],
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Text(
+                                'TỰ ĐỘNG',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        _isAutoFakeSmsIntent
+                            ? 'Bấm icon tin nhắn trong GHN sẽ tự ghi vào Đã gửi và đóng ngay'
+                            : 'Hiện popup để chọn Tạo SMS ảo hoặc Gửi thật qua SIM',
+                        style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                      ),
+                    ],
+                  ),
+                ),
+                Switch(
+                  value: _isAutoFakeSmsIntent,
+                  onChanged: _toggleAutoFakeSmsIntent,
+                  activeColor: Colors.green[700],
                 ),
               ],
             ),

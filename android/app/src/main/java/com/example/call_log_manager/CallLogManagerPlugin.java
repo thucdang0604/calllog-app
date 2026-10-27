@@ -222,6 +222,12 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
             case "setSmsFakeMode":
                 setSmsFakeMode(call, result);
                 break;
+            case "getAutoFakeSmsIntent":
+                getAutoFakeSmsIntent(result);
+                break;
+            case "setAutoFakeSmsIntent":
+                setAutoFakeSmsIntent(call, result);
+                break;
 
             default:
                 result.notImplemented();
@@ -657,6 +663,23 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
         if (enabled != null) {
             android.content.SharedPreferences prefs = context.getSharedPreferences("floating_window_state", Context.MODE_PRIVATE);
             prefs.edit().putBoolean("sms_fake_mode", enabled).apply();
+            result.success(true);
+        } else {
+            result.success(false);
+        }
+    }
+
+    private void getAutoFakeSmsIntent(Result result) {
+        android.content.SharedPreferences prefs = context.getSharedPreferences("floating_window_state", Context.MODE_PRIVATE);
+        boolean autoFake = prefs.getBoolean("sms_auto_fake_intent", false);
+        result.success(autoFake);
+    }
+
+    private void setAutoFakeSmsIntent(MethodCall call, Result result) {
+        Boolean enabled = call.argument("enabled");
+        if (enabled != null) {
+            android.content.SharedPreferences prefs = context.getSharedPreferences("floating_window_state", Context.MODE_PRIVATE);
+            prefs.edit().putBoolean("sms_auto_fake_intent", enabled).apply();
             result.success(true);
         } else {
             result.success(false);
