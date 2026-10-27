@@ -216,6 +216,13 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
                 openQuickCamera(result);
                 break;
 
+            case "getSmsFakeMode":
+                getSmsFakeMode(result);
+                break;
+            case "setSmsFakeMode":
+                setSmsFakeMode(call, result);
+                break;
+
             default:
                 result.notImplemented();
                 break;
@@ -633,6 +640,23 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
                 context.startService(intent);
             } catch (Exception ignored) {}
 
+            result.success(true);
+        } else {
+            result.success(false);
+        }
+    }
+
+    private void getSmsFakeMode(Result result) {
+        android.content.SharedPreferences prefs = context.getSharedPreferences("floating_window_state", Context.MODE_PRIVATE);
+        boolean fakeMode = prefs.getBoolean("sms_fake_mode", false);
+        result.success(fakeMode);
+    }
+
+    private void setSmsFakeMode(MethodCall call, Result result) {
+        Boolean enabled = call.argument("enabled");
+        if (enabled != null) {
+            android.content.SharedPreferences prefs = context.getSharedPreferences("floating_window_state", Context.MODE_PRIVATE);
+            prefs.edit().putBoolean("sms_fake_mode", enabled).apply();
             result.success(true);
         } else {
             result.success(false);

@@ -66,6 +66,17 @@ final class PaymentTrackingStore {
         });
     }
 
+    static synchronized boolean setSmsSimulated(Context context, String id) {
+        return updateRecord(context, id, record -> {
+            try {
+                record.put("smsStatus", "simulated");
+                record.put("sentAt", System.currentTimeMillis());
+            } catch (JSONException ignored) {
+                // Leave the stored values unchanged if an update fails.
+            }
+        });
+    }
+
     static synchronized int recordCustomerReply(
         Context context,
         String senderPhone,

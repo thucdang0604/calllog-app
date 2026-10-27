@@ -358,6 +358,7 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget> {
   final TextEditingController _controller = TextEditingController();
   bool _hasSmsPermission = false;
   bool _hasIncomingSmsPermission = false;
+  bool _isSmsFakeMode = false;
   bool _isLoading = true;
 
   @override
@@ -374,11 +375,13 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget> {
       final bool hasIncomingPerm = await channel.invokeMethod(
         'hasIncomingSmsPermission',
       );
+      final bool smsFakeMode = await channel.invokeMethod('getSmsFakeMode');
       if (mounted) {
         setState(() {
           _controller.text = template;
           _hasSmsPermission = hasPerm;
           _hasIncomingSmsPermission = hasIncomingPerm;
+          _isSmsFakeMode = smsFakeMode;
           _isLoading = false;
         });
       }
@@ -469,6 +472,35 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget> {
     }
   }
 
+  Future<void> _toggleSmsFakeMode(bool enabled) async {
+    try {
+      const channel = MethodChannel('call_log_manager');
+      final saved = await channel.invokeMethod<bool>('setSmsFakeMode', {
+        'enabled': enabled,
+      });
+      if (saved != true) throw StateError('Không lưu được chế độ SMS');
+      if (mounted) {
+        setState(() => _isSmsFakeMode = enabled);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              enabled
+                  ? 'SMS ảo sẽ nằm trong mục Đã gửi, khách không nhận được'
+                  : 'Đã chuyển về gửi SMS thật qua SIM',
+            ),
+            backgroundColor: enabled ? Colors.deepOrange : Colors.green,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Không đổi được chế độ SMS: $error')),
+      );
+    }
+  }
+
   @override
   void dispose() {
     _controller.dispose();
@@ -511,6 +543,92 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget> {
             ],
           ),
           const SizedBox(height: 12),
+
+          // === Toggle SMS Ảo ===
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: _isSmsFakeMode
+                  ? Colors.deepOrange.withValues(alpha: 0.08)
+                  : Colors.grey.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: _isSmsFakeMode
+                    ? Colors.deepOrange.withValues(alpha: 0.4)
+                    : Colors.grey.withValues(alpha: 0.2),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  _isSmsFakeMode
+                      ? Icons.sms_failed_outlined
+                      : Icons.sms_outlined,
+                  color: _isSmsFakeMode ? Colors.deepOrange : Colors.grey[600],
+                  size: 22,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              'SMS ảo',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: _isSmsFakeMode
+                                    ? Colors.deepOrange[800]
+                                    : Colors.grey[800],
+                              ),
+                            ),
+                          ),
+                          if (_isSmsFakeMode) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 1,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.deepOrange,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Text(
+                                'ĐANG BẬT',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        _isSmsFakeMode
+                            ? 'Hiện trong SMS đã gửi · khách không nhận · cần đổi app SMS tạm thời'
+                            : 'Gửi SMS thật qua SIM khi tắt chế độ ảo',
+                        style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                      ),
+                    ],
+                  ),
+                ),
+                Switch(
+                  value: _isSmsFakeMode,
+                  onChanged: _toggleSmsFakeMode,
+                  activeColor: Colors.deepOrange,
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 12),
           TextField(
             controller: _controller,
             maxLines: 2,
@@ -544,18 +662,22 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget> {
               ),
               const SizedBox(width: 8),
               OutlinedButton.icon(
-                onPressed: _requestSmsPermission,
+                onPressed: _isSmsFakeMode ? null : _requestSmsPermission,
                 icon: Icon(
-                  _hasSmsPermission
+                  _isSmsFakeMode || _hasSmsPermission
                       ? Icons.check_circle
                       : Icons.warning_amber_rounded,
-                  color: _hasSmsPermission ? Colors.green : Colors.orange,
+                  color: _isSmsFakeMode || _hasSmsPermission
+                      ? Colors.green
+                      : Colors.orange,
                   size: 18,
                 ),
                 label: Text(
-                  _hasSmsPermission ? 'Đã có quyền' : 'Cấp quyền SMS',
+                  _isSmsFakeMode
+                      ? 'Đổi app khi tạo'
+                      : (_hasSmsPermission ? 'Đã có quyền' : 'Cấp quyền SMS'),
                   style: TextStyle(
-                    color: _hasSmsPermission
+                    color: _isSmsFakeMode || _hasSmsPermission
                         ? Colors.green[700]
                         : Colors.orange[800],
                     fontWeight: FontWeight.bold,
@@ -563,7 +685,9 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget> {
                 ),
                 style: OutlinedButton.styleFrom(
                   side: BorderSide(
-                    color: _hasSmsPermission ? Colors.green : Colors.orange,
+                    color: _isSmsFakeMode || _hasSmsPermission
+                        ? Colors.green
+                        : Colors.orange,
                   ),
                   padding: const EdgeInsets.symmetric(
                     vertical: 10,

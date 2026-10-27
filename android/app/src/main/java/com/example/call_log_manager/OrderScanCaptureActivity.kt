@@ -501,6 +501,7 @@ class OrderScanCaptureActivity : AppCompatActivity() {
         val status = PaymentTrackingStore.findRecord(this, sessionId)?.optString("smsStatus")
         val message = when (status) {
             "sent" -> "SMS đã được gửi lên mạng · Ảnh lưu trên thiết bị"
+            "simulated" -> "SMS ảo đã nằm trong mục Đã gửi, khách không nhận · Ảnh lưu trên thiết bị"
             "failed" -> "SMS gửi thất bại · Ảnh đã lưu, hãy kiểm tra trước khi dùng"
             else -> "Đang chờ kết quả gửi SMS · Ảnh lưu trên thiết bị"
         }

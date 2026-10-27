@@ -784,7 +784,9 @@ public class FloatingWindowService extends Service {
         int receivedCount = 0;
         for (int index = records.length() - 1; index >= 0; index--) {
             JSONObject record = records.optJSONObject(index);
-            if (record == null || !"sent".equals(record.optString("smsStatus"))) continue;
+            if (record == null) continue;
+            String smsStatus = record.optString("smsStatus");
+            if (!"sent".equals(smsStatus) && !"simulated".equals(smsStatus)) continue;
 
             boolean received = "received".equals(record.optString("status"));
             if (received) receivedCount++;
@@ -842,13 +844,14 @@ public class FloatingWindowService extends Service {
         String orderCode = record.optString("orderCode", "").trim();
         String amount = record.optString("amount", "").trim();
         boolean customerReplied = record.optBoolean("customerReplied", false);
+        boolean simulated = "simulated".equals(record.optString("smsStatus"));
 
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.VERTICAL);
         row.setPadding(dp(6), dp(4), dp(6), dp(4));
 
         TextView orderView = new TextView(this);
-        orderView.setText((customerReplied ? "✉ Có phản hồi · " : "")
+        orderView.setText((simulated ? "SMS ảo · " : (customerReplied ? "✉ Có phản hồi · " : ""))
             + (orderCode.isEmpty() ? "Chưa quét mã đơn" : "Đơn " + orderCode));
         orderView.setTextColor(0xFF222222);
         orderView.setTextSize(12);
@@ -914,7 +917,7 @@ public class FloatingWindowService extends Service {
         ));
         row.setBackgroundColor(received
             ? 0xFFE8F5E9
-            : (customerReplied ? 0xFFE3F2FD : 0xFFF4F4F4));
+            : (simulated ? 0xFFFFF3E0 : (customerReplied ? 0xFFE3F2FD : 0xFFF4F4F4)));
 
         LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
@@ -1089,7 +1092,9 @@ public class FloatingWindowService extends Service {
         // multipart SMS, which the previous single-part send path rejected.
         String message = template + amount + " VND";
 
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
+        final boolean isFakeMode = getPrefs().getBoolean("sms_fake_mode", false);
+
+        if (!isFakeMode && ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
             Toast.makeText(this, "⚠️ Chưa cấp quyền gửi SMS. Hãy cấp quyền trong App!", Toast.LENGTH_LONG).show();
             hideSmsInput();
             return;
@@ -1097,6 +1102,22 @@ public class FloatingWindowService extends Service {
 
         final String finalCleanPhone = cleanPhone;
         final String finalAmount = amount;
+        if (isFakeMode) {
+            try {
+                Intent fakeIntent = new Intent(this, FakeSmsRoleActivity.class);
+                fakeIntent.putExtra(FakeSmsRoleActivity.EXTRA_PHONE, finalCleanPhone);
+                fakeIntent.putExtra(FakeSmsRoleActivity.EXTRA_AMOUNT, finalAmount);
+                fakeIntent.putExtra(FakeSmsRoleActivity.EXTRA_MESSAGE, message);
+                fakeIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(fakeIntent);
+            } catch (Exception error) {
+                Log.e(TAG, "Cannot start fake SMS role request", error);
+                Toast.makeText(this, "Không mở được bước tạo SMS ảo", Toast.LENGTH_LONG).show();
+            }
+            hideSmsInput();
+            return;
+        }
+
         String sessionId = PaymentTrackingStore.createSmsSession(this, finalCleanPhone, finalAmount, message);
         if (sessionId.isEmpty()) {
             Toast.makeText(this, "Không lưu được phiên nhắn tin", Toast.LENGTH_LONG).show();

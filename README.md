@@ -13,6 +13,10 @@
 
 Tải `calllog.apk` từ trang Releases, mở tệp trên điện thoại Android và xác nhận cài đặt. Khi cập nhật, cài bản mới đè lên bản cũ để giữ dữ liệu trong ứng dụng.
 
+## SMS ảo
+
+Bật **SMS ảo** trong cấu hình SMS rồi tạo tin từ popup. Android sẽ yêu cầu chọn APP NVPTTT làm ứng dụng SMS mặc định trong chốc lát để ghi tin vào mục **Đã gửi**. Tin này trông như tin đã gửi trong ứng dụng SMS nhưng không được phát qua SIM và người nhận không nhận được. Sau khi tạo tin, chọn lại ứng dụng SMS cũ trong màn Cài đặt mà CallLog mở ra; màn quét mã đơn sẽ tiếp tục khi bạn quay lại. Hãy khôi phục ứng dụng SMS cũ ngay để tiếp tục nhận SMS/MMS bình thường.
+
 ## Build từ mã nguồn
 
 Yêu cầu Flutter stable và Android SDK. Chạy:

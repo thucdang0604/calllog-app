@@ -4,7 +4,9 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.os.Build
+import android.app.role.RoleManager
 import android.provider.Settings
+import android.provider.Telephony
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugins.GeneratedPluginRegistrant
@@ -106,6 +108,25 @@ class MainActivity: FlutterActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         dispatchTimeMarkRequest(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val prefs = getSharedPreferences("fake_sms_role", MODE_PRIVATE)
+        if (!prefs.getBoolean("restore_required", false)) return
+
+        val stillDefault = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            getSystemService(RoleManager::class.java)?.isRoleHeld(RoleManager.ROLE_SMS) == true
+        } else {
+            packageName == Telephony.Sms.getDefaultSmsPackage(this)
+        }
+        if (stillDefault) {
+            startActivity(Intent(this, FakeSmsRoleActivity::class.java).apply {
+                putExtra(FakeSmsRoleActivity.EXTRA_RESTORE_ONLY, true)
+            })
+        } else {
+            prefs.edit().putBoolean("restore_required", false).apply()
+        }
     }
 
     private fun dispatchTimeMarkRequest(intent: Intent?) {

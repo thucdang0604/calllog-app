@@ -34,7 +34,12 @@ class _PaymentReconciliationScreenState
   String? _error;
 
   List<_PaymentRecord> get _trackableRecords => _records
-      .where((record) => record.smsStatus == 'sent' || record.smsStatus.isEmpty)
+      .where(
+        (record) =>
+            record.smsStatus == 'sent' ||
+            record.smsStatus == 'simulated' ||
+            record.smsStatus.isEmpty,
+      )
       .toList();
 
   List<_PaymentRecord> get _pending =>
@@ -161,9 +166,9 @@ class _PaymentReconciliationScreenState
 
     await Clipboard.setData(ClipboardData(text: code));
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Đã sao chép mã vận đơn.')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Đã sao chép mã vận đơn.')));
   }
 
   Future<void> _showRecordDetails(_PaymentRecord record) async {
@@ -413,7 +418,9 @@ class _PaymentReconciliationScreenState
         : _recordIcon(received);
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
-      color: record.customerReplied ? Colors.lightBlue.shade50 : null,
+      color: record.smsStatus == 'simulated'
+          ? Colors.deepOrange.shade50
+          : (record.customerReplied ? Colors.lightBlue.shade50 : null),
       child: ListTile(
         onTap: () => _showRecordDetails(record),
         leading: leading,
@@ -437,6 +444,7 @@ class _PaymentReconciliationScreenState
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
+              '${record.smsStatus == 'simulated' ? 'SMS ảo · ' : ''}'
               '${_formatAmount(record.amountValue, fallback: record.amount)} · ${_formatTime(record.sentAt)}',
             ),
             const SizedBox(height: 2),
@@ -477,9 +485,7 @@ class _PaymentReconciliationScreenState
                       ),
                     ),
                   ),
-                Text(
-                  '4 số cuối: ${lastFour.isEmpty ? '----' : lastFour}',
-                ),
+                Text('4 số cuối: ${lastFour.isEmpty ? '----' : lastFour}'),
               ],
             ),
             if (record.customerReplied)
@@ -714,6 +720,14 @@ class _PaymentRecordDetailsScreenState
                   title: const Text('Số tiền'),
                   subtitle: Text(widget.amountText),
                 ),
+                if (record.smsStatus == 'simulated')
+                  const ListTile(
+                    leading: Icon(Icons.info_outline),
+                    title: Text('SMS ảo'),
+                    subtitle: Text(
+                      'Có trong mục Đã gửi của ứng dụng SMS; khách không nhận tin nhắn.',
+                    ),
+                  ),
                 ListTile(
                   leading: Icon(
                     record.isReceived
@@ -725,7 +739,9 @@ class _PaymentRecordDetailsScreenState
                 ),
                 ListTile(
                   leading: const Icon(Icons.schedule),
-                  title: const Text('Gửi lúc'),
+                  title: Text(
+                    record.smsStatus == 'simulated' ? 'Tạo lúc' : 'Gửi lúc',
+                  ),
                   subtitle: Text(widget.sentAtText),
                 ),
               ],
@@ -813,7 +829,9 @@ class _PaymentRecordDetailsScreenState
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Chạm để mở hội thoại SMS với khách',
+                      record.smsStatus == 'simulated'
+                          ? 'Chạm để xem trong ứng dụng SMS · khách không nhận tin'
+                          : 'Chạm để mở hội thoại SMS với khách',
                       style: TextStyle(
                         color: Theme.of(context).colorScheme.primary,
                         fontSize: 12,
