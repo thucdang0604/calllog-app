@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
@@ -32,6 +33,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.exifinterface.media.ExifInterface
 import com.google.mlkit.vision.barcode.BarcodeScanner
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
@@ -51,6 +53,8 @@ class OrderScanCaptureActivity : AppCompatActivity() {
 
         private const val TAG = "OrderScanCapture"
         private const val CAMERA_PERMISSION_REQUEST = 2401
+        private const val MAX_STORED_IMAGE_SIDE = 2048
+        private const val JPEG_QUALITY = 86
     }
 
     private val sessionId: String by lazy { intent.getStringExtra(EXTRA_SESSION_ID).orEmpty() }
@@ -387,9 +391,11 @@ class OrderScanCaptureActivity : AppCompatActivity() {
             resetScanner("Không tạo được thư mục lưu ảnh")
             return
         }
-        val outputFile = File(folder, "${sessionId}_${System.currentTimeMillis()}.jpg")
+        val imageName = "${sessionId}_${System.currentTimeMillis()}"
+        val rawFile = File(folder, ".$imageName.capture.jpg")
+        val outputFile = File(folder, "$imageName.jpg")
 
-        val outputOptions = ImageCapture.OutputFileOptions.Builder(outputFile).build()
+        val outputOptions = ImageCapture.OutputFileOptions.Builder(rawFile).build()
         capture.takePicture(
             outputOptions,
             ContextCompat.getMainExecutor(this),
@@ -401,23 +407,126 @@ class OrderScanCaptureActivity : AppCompatActivity() {
 
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                     val capturedAt = System.currentTimeMillis()
-                    val previousPath = PaymentTrackingStore.findRecord(this@OrderScanCaptureActivity, sessionId)
-                        ?.optString("imagePath")
-                        .orEmpty()
-                    PaymentTrackingStore.setOrderCapture(
-                        this@OrderScanCaptureActivity,
-                        sessionId,
-                        orderCode,
-                        outputFile.absolutePath,
-                        capturedAt
-                    )
-                    if (previousPath.isNotBlank() && previousPath != outputFile.absolutePath) {
-                        File(previousPath).delete()
+                    scanMessageView.text = "Đã quét $orderCode\nĐang tối ưu ảnh..."
+                    try {
+                        cameraExecutor.execute {
+                            val savedFile = try {
+                                optimizeCapturedImage(rawFile, outputFile)
+                            } catch (error: Exception) {
+                                Log.w(TAG, "Không nén được ảnh, giữ ảnh gốc", error)
+                                rawFile
+                            }
+                            val appContext = applicationContext
+                            val previousPath = PaymentTrackingStore.findRecord(appContext, sessionId)
+                                ?.optString("imagePath")
+                                .orEmpty()
+                            PaymentTrackingStore.setOrderCapture(
+                                appContext,
+                                sessionId,
+                                orderCode,
+                                savedFile.absolutePath,
+                                capturedAt
+                            )
+                            if (previousPath.isNotBlank() && previousPath != savedFile.absolutePath) {
+                                File(previousPath).delete()
+                            }
+                            runOnUiThread {
+                                if (!isFinishing && !isDestroyed) showCapturedResult(savedFile, orderCode)
+                            }
+                        }
+                    } catch (error: RejectedExecutionException) {
+                        PaymentTrackingStore.setOrderCapture(
+                            applicationContext,
+                            sessionId,
+                            orderCode,
+                            rawFile.absolutePath,
+                            capturedAt
+                        )
+                        if (!isFinishing && !isDestroyed) showCapturedResult(rawFile, orderCode)
                     }
-                    showCapturedResult(outputFile, orderCode)
                 }
             }
         )
+    }
+
+    private fun optimizeCapturedImage(sourceFile: File, outputFile: File): File {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(sourceFile.absolutePath, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+            throw IllegalStateException("Không đọc được ảnh vừa chụp")
+        }
+
+        var sampleSize = 1
+        while (maxOf(bounds.outWidth / sampleSize, bounds.outHeight / sampleSize)
+            > MAX_STORED_IMAGE_SIDE * 3 / 2) {
+            sampleSize *= 2
+        }
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize
+            inPreferredConfig = Bitmap.Config.RGB_565
+        }
+        val decoded = BitmapFactory.decodeFile(sourceFile.absolutePath, options)
+            ?: throw IllegalStateException("Không giải mã được ảnh vừa chụp")
+
+        var bitmap = decoded
+        try {
+            val rotation = try {
+                ExifInterface(sourceFile).rotationDegrees
+            } catch (_: Exception) {
+                0
+            }
+            if (rotation != 0) {
+                val rotated = Bitmap.createBitmap(
+                    bitmap, 0, 0, bitmap.width, bitmap.height,
+                    Matrix().apply { postRotate(rotation.toFloat()) }, true
+                )
+                if (rotated !== bitmap) bitmap.recycle()
+                bitmap = rotated
+            }
+
+            val longestSide = maxOf(bitmap.width, bitmap.height)
+            if (longestSide > MAX_STORED_IMAGE_SIDE) {
+                val scale = MAX_STORED_IMAGE_SIDE.toFloat() / longestSide
+                val scaled = Bitmap.createScaledBitmap(
+                    bitmap,
+                    maxOf(1, (bitmap.width * scale).toInt()),
+                    maxOf(1, (bitmap.height * scale).toInt()),
+                    true
+                )
+                if (scaled !== bitmap) bitmap.recycle()
+                bitmap = scaled
+            }
+
+            val temporaryFile = File(outputFile.parentFile, ".${outputFile.name}.tmp")
+            try {
+                temporaryFile.outputStream().use { output ->
+                    if (!bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, output)) {
+                        throw IllegalStateException("Không nén được ảnh đơn hàng")
+                    }
+                    output.flush()
+                }
+
+                if (temporaryFile.length() >= sourceFile.length()) {
+                    temporaryFile.delete()
+                    if (outputFile.exists()) outputFile.delete()
+                    return if (sourceFile.renameTo(outputFile)) outputFile else sourceFile
+                }
+                if (outputFile.exists() && !outputFile.delete()) {
+                    throw IllegalStateException("Không thay thế được ảnh đơn hàng cũ")
+                }
+                if (!temporaryFile.renameTo(outputFile)) {
+                    throw IllegalStateException("Không hoàn tất được ảnh đã nén")
+                }
+                val originalLength = sourceFile.length()
+                sourceFile.delete()
+                Log.i(TAG, "Ảnh đơn hàng: $originalLength → ${outputFile.length()} bytes")
+                return outputFile
+            } finally {
+                temporaryFile.delete()
+            }
+        } finally {
+            bitmap.recycle()
+        }
     }
 
     private fun showCapturedResult(imageFile: File, orderCode: String) {
@@ -479,14 +588,27 @@ class OrderScanCaptureActivity : AppCompatActivity() {
 
         var sampleSize = 1
         val maxPreviewSide = 1400
-        while (maxOf(bounds.outWidth / sampleSize, bounds.outHeight / sampleSize) > maxPreviewSide) {
+        while (maxOf(bounds.outWidth / sampleSize, bounds.outHeight / sampleSize)
+            > maxPreviewSide * 3 / 2) {
             sampleSize *= 2
         }
         val options = BitmapFactory.Options().apply {
             inSampleSize = sampleSize
             inPreferredConfig = Bitmap.Config.RGB_565
         }
-        return BitmapFactory.decodeFile(imageFile.absolutePath, options)
+        val decoded = BitmapFactory.decodeFile(imageFile.absolutePath, options) ?: return null
+        val rotation = try {
+            ExifInterface(imageFile).rotationDegrees
+        } catch (_: Exception) {
+            0
+        }
+        if (rotation == 0) return decoded
+        val rotated = Bitmap.createBitmap(
+            decoded, 0, 0, decoded.width, decoded.height,
+            Matrix().apply { postRotate(rotation.toFloat()) }, true
+        )
+        if (rotated !== decoded) decoded.recycle()
+        return rotated
     }
 
     private fun resetScanner(message: String) {
@@ -533,7 +655,7 @@ class OrderScanCaptureActivity : AppCompatActivity() {
         if (barcodeScannerDelegate.isInitialized()) barcodeScanner.close()
         previewBitmap?.recycle()
         previewBitmap = null
-        cameraExecutor.shutdownNow()
+        cameraExecutor.shutdown()
         super.onDestroy()
     }
 }

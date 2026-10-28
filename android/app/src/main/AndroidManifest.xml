@@ -77,6 +77,12 @@
             android:configChanges="orientation|screenSize|keyboardHidden" />
 
         <activity
+            android:name=".PaymentPodViewerActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+
+        <activity
             android:name=".FakeSmsRoleActivity"
             android:exported="false"
             android:theme="@android:style/Theme.Material.Light.NoActionBar" />

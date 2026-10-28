@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>NVPTTT · Quản lý bản quyền SMS</title>
+    <link rel="stylesheet" href="/admin.css" />
+  </head>
+  <body>
+    <main class="page-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">APP NVPTTT</p>
+          <h1>Quản lý bản quyền SMS</h1>
+          <p class="muted">Theo dõi thanh toán, thiết bị và thời hạn sử dụng.</p>
+        </div>
+        <button id="logoutButton" class="button button-quiet hidden" type="button">Đăng xuất</button>
+      </header>
+
+      <section id="loginPanel" class="panel login-panel">
+        <h2>Đăng nhập quản trị</h2>
+        <p class="muted">Chỉ tài khoản Google <strong>thucdang2205@gmail.com</strong> được phép quản lý bản quyền.</p>
+        <div class="stack">
+          <button id="googleSignInButton" class="button" type="button">Đăng nhập bằng Google</button>
+        </div>
+        <p id="loginMessage" class="message" role="status"></p>
+      </section>
+
+      <section id="dashboard" class="hidden">
+        <div id="pageMessage" class="message" role="status"></div>
+        <div class="toolbar">
+          <div>
+            <strong id="adminIdentity"></strong>
+            <span class="muted">· dữ liệu cập nhật khi tải lại</span>
+          </div>
+          <button id="refreshButton" class="button button-quiet" type="button">Làm mới</button>
+        </div>
+
+        <div class="stats-grid">
+          <article class="stat-card"><span>Đang hoạt động</span><strong id="activeCount">0</strong></article>
+          <article class="stat-card"><span>Đã hết hạn</span><strong id="expiredCount">0</strong></article>
+          <article class="stat-card"><span>Đã thu hồi</span><strong id="revokedCount">0</strong></article>
+          <article class="stat-card"><span>Đơn đang chờ</span><strong id="pendingCount">0</strong></article>
+          <article class="stat-card stat-warning"><span>Giao dịch cần kiểm tra</span><strong id="unmatchedCount">0</strong></article>
+        </div>
+
+        <section class="panel">
+          <div class="section-heading">
+            <div><h2>Cấp hoặc gia hạn thủ công</h2><p class="muted">Dùng khi cần xử lý thanh toán đã đối soát ngoài hệ thống.</p></div>
+          </div>
+          <form id="grantForm" class="grant-form">
+            <label>Mã thiết bị<input id="deviceIdInput" placeholder="SMS-XXXX-XXXX" required /></label>
+            <label>Gói<select id="planInput" required></select></label>
+            <button class="button" type="submit">Cấp / gia hạn</button>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="section-heading">
+            <div><h2>License theo thiết bị</h2><p class="muted">Danh sách gần nhất; tìm kiếm theo mã thiết bị, gói hoặc trạng thái.</p></div>
+          </div>
+          <div class="filters">
+            <label class="search-label">Tìm kiếm<input id="searchInput" type="search" placeholder="SMS-…" /></label>
+            <label>Trạng thái<select id="statusFilter"><option value="all">Tất cả</option><option value="active">Đang hoạt động</option><option value="expired">Hết hạn</option><option value="revoked">Đã thu hồi</option></select></label>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Mã thiết bị</th><th>Gói</th><th>Trạng thái</th><th>Hạn dùng</th><th>Nguồn</th><th></th></tr></thead>
+              <tbody id="licenseRows"><tr><td colspan="6" class="empty">Chưa tải dữ liệu.</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="section-heading"><div><h2>Đơn thanh toán</h2><p class="muted">Kiểm tra tài khoản ngân hàng trước khi bấm xác nhận; hệ thống sẽ kích hoạt license cho thiết bị.</p></div></div>
+          <div class="table-wrap">
+            <table><thead><tr><th>Mã chuyển khoản</th><th>Thiết bị</th><th>Gói</th><th>Số tiền</th><th>Trạng thái</th><th>Tạo lúc</th><th>Thao tác</th></tr></thead><tbody id="orderRows"></tbody></table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="section-heading"><div><h2>Giao dịch đã ghi nhận</h2><p class="muted">Bao gồm các giao dịch webhook và khoản đã được quản lý đối soát thủ công.</p></div></div>
+          <div class="table-wrap">
+            <table><thead><tr><th>Mã giao dịch</th><th>Số tiền</th><th>Nội dung</th><th>Kết quả</th><th>Lý do</th></tr></thead><tbody id="transactionRows"></tbody></table>
+          </div>
+        </section>
+      </section>
+      <footer>NVPTTT · Bảng điều khiển nội bộ</footer>
+    </main>
+    <script src="/config.js"></script>
+    <script type="module" src="/admin.js"></script>
+  </body>
+</html>

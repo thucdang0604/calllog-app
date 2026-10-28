@@ -10,6 +10,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
@@ -42,11 +43,15 @@ public final class SmsSendToActivity extends Activity {
     private static final String TAG = "SmsSendToActivity";
     private static final String PREFS_NAME = "floating_window_state";
     private static final String KEY_AUTO_FAKE_INTENT = "sms_auto_fake_intent";
+    private static final String SMS_ROLE_PREFS = "fake_sms_role";
+    private static final String KEY_PREVIOUS_SMS_PACKAGE = "previous_sms_package";
+    private static final String KEY_RESTORE_REQUIRED = "restore_required";
     private static final int REQUEST_SMS_ROLE = 9021;
 
     private String pendingPhone = "";
     private String pendingMessage = "";
     private boolean pendingIsFake = true;
+    private boolean requestedTemporarySmsRole;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -145,6 +150,12 @@ public final class SmsSendToActivity extends Activity {
     }
 
     private void requestSmsRole() {
+        String previousPackage = findPreviousSmsPackage();
+        getSharedPreferences(SMS_ROLE_PREFS, MODE_PRIVATE).edit()
+            .putString(KEY_PREVIOUS_SMS_PACKAGE, previousPackage)
+            .putBoolean(KEY_RESTORE_REQUIRED, true)
+            .apply();
+        requestedTemporarySmsRole = true;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             RoleManager roles = getSystemService(RoleManager.class);
             if (roles != null && roles.isRoleAvailable(RoleManager.ROLE_SMS)) {
@@ -157,6 +168,33 @@ public final class SmsSendToActivity extends Activity {
         startActivityForResult(request, REQUEST_SMS_ROLE);
     }
 
+    private String findPreviousSmsPackage() {
+        String currentDefault = Telephony.Sms.getDefaultSmsPackage(this);
+        if (currentDefault != null && !currentDefault.equals(getPackageName())) return currentDefault;
+        Intent sendTo = new Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:"));
+        ResolveInfo resolved = getPackageManager().resolveActivity(
+            sendTo, PackageManager.MATCH_DEFAULT_ONLY);
+        if (resolved != null && resolved.activityInfo != null) {
+            String packageName = resolved.activityInfo.packageName;
+            if (packageName != null && !packageName.equals(getPackageName())) return packageName;
+        }
+        return "";
+    }
+
+    private void finishTemporarySmsRole() {
+        SharedPreferences rolePrefs = getSharedPreferences(SMS_ROLE_PREFS, MODE_PRIVATE);
+        if (requestedTemporarySmsRole
+            && rolePrefs.getBoolean(KEY_RESTORE_REQUIRED, false)
+            && isDefaultSmsApp()) {
+            Intent restore = new Intent(this, FakeSmsRoleActivity.class);
+            restore.putExtra(FakeSmsRoleActivity.EXTRA_RESTORE_ONLY, true);
+            startActivity(restore);
+        } else if (requestedTemporarySmsRole) {
+            rolePrefs.edit().putBoolean(KEY_RESTORE_REQUIRED, false).apply();
+        }
+        finish();
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
@@ -165,7 +203,11 @@ public final class SmsSendToActivity extends Activity {
                 if (!pendingPhone.isEmpty() && !pendingMessage.isEmpty()) {
                     if (pendingIsFake) {
                         if (writeFakeSms(pendingPhone, pendingMessage)) {
-                            finish();
+                            finishTemporarySmsRole();
+                            return;
+                        }
+                        if (requestedTemporarySmsRole) {
+                            finishTemporarySmsRole();
                             return;
                         }
                     } else {
@@ -175,8 +217,17 @@ public final class SmsSendToActivity extends Activity {
                         }
                     }
                 }
+                if (requestedTemporarySmsRole) {
+                    finishTemporarySmsRole();
+                    return;
+                }
                 Toast.makeText(this, "Đã cấp quyền SMS mặc định.", Toast.LENGTH_SHORT).show();
             } else {
+                if (requestedTemporarySmsRole) {
+                    getSharedPreferences(SMS_ROLE_PREFS, MODE_PRIVATE).edit()
+                        .putBoolean(KEY_RESTORE_REQUIRED, false).apply();
+                    requestedTemporarySmsRole = false;
+                }
                 Toast.makeText(this, "Chưa cấp quyền SMS mặc định cho APP NVPTTT", Toast.LENGTH_SHORT).show();
             }
         }
@@ -347,7 +398,7 @@ public final class SmsSendToActivity extends Activity {
 
         SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         CheckBox cbAuto = new CheckBox(this);
-        cbAuto.setText("⚡ Tự động tạo SMS ảo cho các lần sau");
+        cbAuto.setText("⚡ Tự động tạo SMS ảo khi mở SMS từ GHN");
         cbAuto.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         cbAuto.setTextColor(Color.parseColor("#059669"));
         cbAuto.setChecked(prefs.getBoolean(KEY_AUTO_FAKE_INTENT, false));

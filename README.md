@@ -15,7 +15,7 @@ Tải `calllog.apk` từ trang Releases, mở tệp trên điện thoại Androi
 
 ## SMS ảo
 
-Bật **SMS ảo** trong cấu hình SMS rồi tạo tin từ popup. Android sẽ yêu cầu chọn APP NVPTTT làm ứng dụng SMS mặc định trong chốc lát để ghi tin vào mục **Đã gửi**. Tin này trông như tin đã gửi trong ứng dụng SMS nhưng không được phát qua SIM và người nhận không nhận được. Sau khi tạo tin, chọn lại ứng dụng SMS cũ trong màn Cài đặt mà CallLog mở ra; màn quét mã đơn sẽ tiếp tục khi bạn quay lại. Hãy khôi phục ứng dụng SMS cũ ngay để tiếp tục nhận SMS/MMS bình thường.
+SMS nhanh gửi số tiền trong popup luôn gửi thật qua SIM. SMS ảo chỉ dùng trong luồng mở SMS từ icon của GHN: có thể chọn tạo tin trong mục **Đã gửi** hoặc gửi thật qua SIM; tùy chọn tự động tạo SMS ảo cũng chỉ áp dụng cho luồng icon này. Tin ảo không được phát qua SIM nên khách không nhận được. Android sẽ yêu cầu chọn APP NVPTTT làm ứng dụng SMS mặc định trong chốc lát; sau khi tạo tin, hãy chọn lại ứng dụng SMS thường dùng trong màn Cài đặt để tiếp tục nhận SMS/MMS bình thường.
 
 ## Build từ mã nguồn
 

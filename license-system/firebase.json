@@ -1,0 +1,54 @@
+{
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "runtime": "nodejs22",
+      "ignore": ["node_modules", ".git", "firebase-debug.log", "firebase-debug.*", ".env*"]
+    }
+  ],
+  "auth": {
+    "providers": {
+      "anonymous": false,
+      "emailPassword": false,
+      "googleSignIn": {
+        "oAuthBrandDisplayName": "NVPTTT SMS License",
+        "supportEmail": "thucdang2205@gmail.com"
+      }
+    }
+  },
+  "firestore": [
+    {
+      "database": "default",
+      "rules": "firestore.rules"
+    }
+  ],
+  "hosting": {
+    "public": "public",
+    "site": "mylove-2026-sms-admin",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      {
+        "source": "/api/webhook/telegram",
+        "function": {
+          "functionId": "telegramWebhook",
+          "region": "asia-southeast1"
+        }
+      },
+      {
+        "source": "/api/webhook/sepay",
+        "function": {
+          "functionId": "sepayWebhook",
+          "region": "asia-southeast1"
+        }
+      },
+      {
+        "source": "/api/**",
+        "function": {
+          "functionId": "licenseApi",
+          "region": "asia-southeast1"
+        }
+      }
+    ]
+  }
+}

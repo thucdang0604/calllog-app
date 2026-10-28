@@ -9,6 +9,7 @@ import android.os.Build;
 import android.os.Environment;
 import android.provider.Settings;
 import android.provider.Telephony;
+import android.util.Base64;
 import android.util.Log;
 
 import org.json.JSONObject;
@@ -17,11 +18,15 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.security.KeyFactory;
+import java.security.Signature;
+import java.security.spec.X509EncodedKeySpec;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -38,6 +43,7 @@ public final class LicenseManager {
     private static final String KEY_LICENSE_KEY = "activated_license_key";
     private static final String KEY_LICENSE_PLAN = "activated_license_plan";
     private static final String KEY_EXPIRES_AT = "activated_expires_at";
+    private static final String KEY_SERVER_LICENSE_TOKEN = "server_license_token";
     private static final String KEY_TRIAL_USED = "trial_sms_used_count";
     private static final String KEY_LAST_KNOWN_TIME = "last_known_system_time";
 
@@ -92,6 +98,25 @@ public final class LicenseManager {
      */
     public static boolean isLicenseActive(Context context) {
         SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        String serverToken = prefs.getString(KEY_SERVER_LICENSE_TOKEN, "");
+        if (serverToken != null && !serverToken.isEmpty()) {
+            JSONObject entitlement = verifyServerLicenseToken(context, serverToken);
+            if (entitlement == null) return false;
+            if (!"none".equals(entitlement.optString("status"))) {
+                if (!"active".equals(entitlement.optString("status"))) return false;
+                long expiresAt = entitlement.isNull("expiresAt") ? 0L : entitlement.optLong("expiresAt", 0L);
+                long offlineUntil = entitlement.optLong("offlineUntil", 0L);
+                long now = System.currentTimeMillis();
+                long lastKnownTime = prefs.getLong(KEY_LAST_KNOWN_TIME, 0L);
+                if (now < lastKnownTime - 3600_000L) {
+                    Log.w(TAG, "System clock rollback detected for server license");
+                    return false;
+                }
+                prefs.edit().putLong(KEY_LAST_KNOWN_TIME, Math.max(now, lastKnownTime)).apply();
+                return (expiresAt == 0L || expiresAt > now) && offlineUntil > now;
+            }
+        }
+
         String key = prefs.getString(KEY_LICENSE_KEY, "");
         if (key.isEmpty()) {
             // Also check persistent external file
@@ -250,12 +275,75 @@ public final class LicenseManager {
             .putString(KEY_LICENSE_KEY, cleanKey)
             .putString(KEY_LICENSE_PLAN, info.plan)
             .putLong(KEY_EXPIRES_AT, info.expiresAt)
+            .remove(KEY_SERVER_LICENSE_TOKEN)
             .apply();
 
         // Also save to external file so license survives app uninstall
         writeExternalLicenseKey(context, cleanKey);
 
         return true;
+    }
+
+    /** Stores an entitlement signed by the license server after verifying its signature and device binding. */
+    public static boolean saveServerLicenseToken(Context context, String token) {
+        JSONObject entitlement = verifyServerLicenseToken(context, token);
+        if (entitlement == null) return false;
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        long now = System.currentTimeMillis();
+        long lastKnownTime = prefs.getLong(KEY_LAST_KNOWN_TIME, 0L);
+        long issuedAt = entitlement.optLong("issuedAt", now);
+        prefs
+            .edit()
+            .putString(KEY_SERVER_LICENSE_TOKEN, token)
+            .putLong(KEY_LAST_KNOWN_TIME, Math.max(now, Math.max(lastKnownTime, issuedAt)))
+            .apply();
+        return true;
+    }
+
+    private static JSONObject verifyServerLicenseToken(Context context, String token) {
+        if (token == null || token.trim().isEmpty()) return null;
+        try {
+            String[] parts = token.trim().split("\\.");
+            if (parts.length != 2) return null;
+
+            byte[] publicKeyPem;
+            try (java.io.InputStream input = context.getResources().openRawResource(R.raw.license_signing_public);
+                 ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+                byte[] buffer = new byte[1024];
+                int read;
+                while ((read = input.read(buffer)) != -1) output.write(buffer, 0, read);
+                publicKeyPem = output.toByteArray();
+            }
+            String pem = new String(publicKeyPem, StandardCharsets.UTF_8)
+                .replace("-----BEGIN PUBLIC KEY-----", "")
+                .replace("-----END PUBLIC KEY-----", "")
+                .replaceAll("\\s", "");
+            byte[] keyBytes = Base64.decode(pem, Base64.DEFAULT);
+            java.security.PublicKey publicKey = KeyFactory.getInstance("RSA")
+                .generatePublic(new X509EncodedKeySpec(keyBytes));
+
+            Signature verifier = Signature.getInstance("SHA256withRSA");
+            verifier.initVerify(publicKey);
+            verifier.update(parts[0].getBytes(StandardCharsets.US_ASCII));
+            byte[] signatureBytes = Base64.decode(parts[1], Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING);
+            if (!verifier.verify(signatureBytes)) return null;
+
+            byte[] payloadBytes = Base64.decode(parts[0], Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING);
+            JSONObject entitlement = new JSONObject(new String(payloadBytes, StandardCharsets.UTF_8));
+            if (entitlement.optInt("v", 0) != 1) return null;
+            if (!getDeviceId(context).equals(entitlement.optString("deviceId"))) return null;
+            String status = entitlement.optString("status", "");
+            if (!("active".equals(status) || "expired".equals(status) || "revoked".equals(status) || "none".equals(status))) return null;
+            if ("active".equals(status)) {
+                String plan = entitlement.optString("plan", "");
+                if (!("30D".equals(plan) || "90D".equals(plan) || "1Y".equals(plan) || "PERM".equals(plan))) return null;
+                if (!entitlement.has("offlineUntil") || entitlement.optLong("offlineUntil", 0L) <= 0L) return null;
+            }
+            return entitlement;
+        } catch (Exception e) {
+            Log.w(TAG, "Server license token verification failed", e);
+            return null;
+        }
     }
 
     /**
@@ -301,6 +389,14 @@ public final class LicenseManager {
             SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
             String plan = prefs.getString(KEY_LICENSE_PLAN, "TRIAL");
             long expiresAt = prefs.getLong(KEY_EXPIRES_AT, 0L);
+            String serverToken = prefs.getString(KEY_SERVER_LICENSE_TOKEN, "");
+            JSONObject entitlement = serverToken == null || serverToken.isEmpty()
+                ? null : verifyServerLicenseToken(context, serverToken);
+            if (entitlement != null && "none".equals(entitlement.optString("status"))) entitlement = null;
+            if (entitlement != null) {
+                plan = entitlement.optString("plan", "TRIAL");
+                expiresAt = entitlement.isNull("expiresAt") ? 0L : entitlement.optLong("expiresAt", 0L);
+            }
 
             obj.put("deviceId", deviceId);
             obj.put("isLicensed", isLicensed);
@@ -310,6 +406,7 @@ public final class LicenseManager {
             obj.put("plan", isLicensed ? plan : (remaining > 0 ? "TRIAL" : "EXPIRED"));
             obj.put("expiresAt", expiresAt);
             obj.put("expiresAtFormatted", expiresAt > 0 ? formatDate(expiresAt) : (isLicensed ? "Vĩnh viễn" : ""));
+            obj.put("licenseSource", entitlement != null ? "server" : (isLicensed ? "manual" : "none"));
         } catch (Exception ignored) {}
         return obj;
     }

@@ -1,0 +1,9 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // All license and payment reads/writes go through authenticated HTTPS functions.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

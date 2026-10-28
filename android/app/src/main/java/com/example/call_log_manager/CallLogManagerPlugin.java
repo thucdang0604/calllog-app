@@ -216,12 +216,6 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
                 openQuickCamera(result);
                 break;
 
-            case "getSmsFakeMode":
-                getSmsFakeMode(result);
-                break;
-            case "setSmsFakeMode":
-                setSmsFakeMode(call, result);
-                break;
             case "getAutoFakeSmsIntent":
                 getAutoFakeSmsIntent(result);
                 break;
@@ -235,8 +229,14 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
             case "activateSmsLicense":
                 activateSmsLicense(call, result);
                 break;
+            case "applyServerLicenseToken":
+                applyServerLicenseToken(call, result);
+                break;
             case "getDeviceId":
                 getDeviceId(result);
+                break;
+            case "shareText":
+                shareText(call, result);
                 break;
 
             default:
@@ -584,54 +584,14 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
             return;
         }
         String orderCode = record.optString("orderCode", "");
-        String safeOrderCode = orderCode.replaceAll("[^A-Za-z0-9_-]", "_");
-        if (safeOrderCode.isEmpty()) safeOrderCode = "DonHang";
-        if (safeOrderCode.length() > 40) safeOrderCode = safeOrderCode.substring(0, 40);
-        final String displayName = "DonHang_" + safeOrderCode + "_" + System.currentTimeMillis() + ".jpg";
+        final String finalOrderCode = orderCode;
 
         backgroundExecutor.execute(() -> {
-            Uri outputUri = null;
             try {
-                File source = new File(sourcePath);
-                if (!source.isFile()) {
-                    throw new IllegalArgumentException("Ảnh đơn hàng không còn trên thiết bị");
-                }
-
-                ContentValues values = new ContentValues();
-                values.put(MediaStore.Images.Media.DISPLAY_NAME, displayName);
-                values.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    values.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/PaymentReceipts");
-                    values.put(MediaStore.Images.Media.IS_PENDING, 1);
-                }
-
-                ContentResolver resolver = context.getContentResolver();
-                outputUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
-                if (outputUri == null) throw new IllegalStateException("Không tạo được ảnh trong thư viện");
-                try (FileInputStream input = new FileInputStream(source);
-                     OutputStream output = resolver.openOutputStream(outputUri)) {
-                    if (output == null) throw new IllegalStateException("Không mở được tệp ảnh đích");
-                    byte[] buffer = new byte[32 * 1024];
-                    int read;
-                    while ((read = input.read(buffer)) != -1) {
-                        output.write(buffer, 0, read);
-                    }
-                }
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    ContentValues readyValues = new ContentValues();
-                    readyValues.put(MediaStore.Images.Media.IS_PENDING, 0);
-                    resolver.update(outputUri, readyValues, null, null);
-                }
+                Uri outputUri = PaymentReceiptImageExporter.save(context, sourcePath, finalOrderCode);
                 final String uriText = outputUri.toString();
                 mainHandler.post(() -> result.success(uriText));
             } catch (Exception e) {
-                if (outputUri != null) {
-                    try {
-                        context.getContentResolver().delete(outputUri, null, null);
-                    } catch (Exception ignored) {
-                    }
-                }
                 mainHandler.post(() -> result.error("SAVE_PAYMENT_IMAGE_ERROR", e.getMessage(), null));
             }
         });
@@ -656,23 +616,6 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
                 context.startService(intent);
             } catch (Exception ignored) {}
 
-            result.success(true);
-        } else {
-            result.success(false);
-        }
-    }
-
-    private void getSmsFakeMode(Result result) {
-        android.content.SharedPreferences prefs = context.getSharedPreferences("floating_window_state", Context.MODE_PRIVATE);
-        boolean fakeMode = prefs.getBoolean("sms_fake_mode", false);
-        result.success(fakeMode);
-    }
-
-    private void setSmsFakeMode(MethodCall call, Result result) {
-        Boolean enabled = call.argument("enabled");
-        if (enabled != null) {
-            android.content.SharedPreferences prefs = context.getSharedPreferences("floating_window_state", Context.MODE_PRIVATE);
-            prefs.edit().putBoolean("sms_fake_mode", enabled).apply();
             result.success(true);
         } else {
             result.success(false);
@@ -715,8 +658,37 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
         }
     }
 
+    private void applyServerLicenseToken(MethodCall call, Result result) {
+        String token = call.argument("token");
+        result.success(LicenseManager.saveServerLicenseToken(context, token));
+    }
+
     private void getDeviceId(Result result) {
         result.success(LicenseManager.getDeviceId(context));
+    }
+
+    private void shareText(MethodCall call, Result result) {
+        String text = call.argument("text");
+        if (text == null || text.trim().isEmpty()) {
+            result.error("INVALID_ARGUMENTS", "Nội dung chia sẻ đang trống.", null);
+            return;
+        }
+        try {
+            Intent shareIntent = new Intent(Intent.ACTION_SEND);
+            shareIntent.setType("text/plain");
+            shareIntent.putExtra(Intent.EXTRA_TEXT, text);
+            Intent chooser = Intent.createChooser(shareIntent, "Gửi thông tin đơn qua Telegram");
+            if (activity != null) {
+                activity.startActivity(chooser);
+            } else {
+                chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                context.startActivity(chooser);
+            }
+            result.success(true);
+        } catch (Exception e) {
+            Log.e("CallLogManagerPlugin", "Could not open text share sheet", e);
+            result.error("SHARE_FAILED", "Không mở được ứng dụng chia sẻ.", null);
+        }
     }
 
     private void hasSmsPermission(Result result) {

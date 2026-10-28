@@ -5,6 +5,7 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.app.role.RoleManager;
 import android.app.Service;
 import android.content.ContentResolver;
 import android.content.ContentValues;
@@ -27,6 +28,7 @@ import android.os.Vibrator;
 import android.os.VibratorManager;
 import android.provider.CallLog;
 import android.provider.Settings;
+import android.provider.Telephony;
 import android.telephony.PhoneStateListener;
 import android.telephony.SmsManager;
 import android.telephony.TelephonyManager;
@@ -275,10 +277,11 @@ public class FloatingWindowService extends Service {
     }
 
     private int getPanelWidth() {
-        // Keep the panel compact on narrow displays while leaving enough room for row actions.
-        int widthLimit = Math.min(dp(216), getAvailableScreenWidth() - dp(16));
+        // Keep the panel within the display even on narrow/low-resolution devices.
+        int availableWidth = Math.max(dp(1), getAvailableScreenWidth() - dp(16));
         int proportionalWidth = (int) (getAvailableScreenWidth() * 0.62f);
-        return Math.max(dp(184), Math.min(widthLimit, proportionalWidth));
+        int preferredWidth = Math.min(dp(216), Math.max(dp(146), proportionalWidth));
+        return Math.min(availableWidth, preferredWidth);
     }
 
     private int getCallListHeight() {
@@ -291,7 +294,9 @@ public class FloatingWindowService extends Service {
 
     private int getPaymentQueueHeight() {
         int screenBasedHeight = (int) (getAvailableScreenHeight() * 0.25f);
-        return Math.max(dp(88), Math.min(dp(148), screenBasedHeight));
+        int panelChromeHeight = dp(84);
+        int contentBudget = Math.max(dp(40), getAvailableScreenHeight() - panelChromeHeight);
+        return Math.max(dp(40), Math.min(dp(148), Math.min(screenBasedHeight, contentBudget)));
     }
 
     private int getOverlayCallCount() {
@@ -844,6 +849,8 @@ public class FloatingWindowService extends Service {
         String orderCode = record.optString("orderCode", "").trim();
         String amount = record.optString("amount", "").trim();
         boolean customerReplied = record.optBoolean("customerReplied", false);
+        String replyMessage = record.optString("replyMessage", "").trim();
+        String imagePath = record.optString("imagePath", "").trim();
         boolean simulated = "simulated".equals(record.optString("smsStatus"));
 
         LinearLayout row = new LinearLayout(this);
@@ -876,19 +883,36 @@ public class FloatingWindowService extends Service {
         actionRow.setGravity(Gravity.CENTER_VERTICAL);
 
         TextView detailsView = new TextView(this);
-        String details = (lastFour.isEmpty() ? "Không rõ SĐT" : "••" + lastFour)
-            + (amount.isEmpty() ? "" : "  ·  " + amount + "đ");
-        detailsView.setText(details);
+        detailsView.setText(lastFour.isEmpty() ? "Không rõ SĐT" : "••" + lastFour);
         detailsView.setTextColor(0xFF555555);
         detailsView.setTextSize(11);
         detailsView.setSingleLine(true);
         detailsView.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        if (!phone.trim().isEmpty()) {
+            detailsView.setTextColor(0xFF1565C0);
+            detailsView.setPaintFlags(
+                detailsView.getPaintFlags() | android.graphics.Paint.UNDERLINE_TEXT_FLAG
+            );
+            detailsView.setContentDescription(
+                "Mở tin nhắn đã gửi tới số điện thoại có 4 số cuối "
+                    + (lastFour.isEmpty() ? "không rõ" : lastFour)
+            );
+            detailsView.setOnClickListener(v -> openSmsConversation(phone));
+        }
+
+        TextView amountView = new TextView(this);
+        amountView.setText(amount.isEmpty() ? "" : amount + "đ");
+        amountView.setTextColor(0xFF555555);
+        amountView.setTextSize(11);
+        amountView.setGravity(Gravity.CENTER_VERTICAL);
+        amountView.setSingleLine(true);
+        amountView.setEllipsize(android.text.TextUtils.TruncateAt.END);
 
         Button receivedButton = new Button(this);
-        receivedButton.setText(received ? "↩ Chờ" : "✓ Nhận");
+        receivedButton.setText(received ? "POD" : "✓ Nhận");
         receivedButton.setTextSize(10);
         receivedButton.setContentDescription(received
-            ? "Chuyển khoản này về trạng thái đang chờ"
+            ? "Xem ảnh POD của đơn hàng"
             : "Đánh dấu khoản chuyển khoản đã nhận");
         receivedButton.setMinWidth(0);
         receivedButton.setMinimumWidth(0);
@@ -896,13 +920,23 @@ public class FloatingWindowService extends Service {
         receivedButton.setMinimumHeight(0);
         receivedButton.setPadding(dp(6), 0, dp(6), 0);
         receivedButton.setOnClickListener(v -> {
-            if (PaymentTrackingStore.setReceived(FloatingWindowService.this, id, !received)) {
+            if (received) {
+                openPaymentPod(id, imagePath);
+            } else if (PaymentTrackingStore.setReceived(FloatingWindowService.this, id, true)) {
                 PaymentTrackingEventBus.notifyRecordsChanged();
                 renderPaymentQueue();
             }
         });
 
         actionRow.addView(detailsView, new LinearLayout.LayoutParams(0, dp(30), 1f));
+        if (!amount.isEmpty()) {
+            LinearLayout.LayoutParams amountParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                dp(30)
+            );
+            amountParams.setMargins(dp(4), 0, dp(4), 0);
+            actionRow.addView(amountView, amountParams);
+        }
         actionRow.addView(receivedButton, new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT,
             dp(30)
@@ -915,6 +949,20 @@ public class FloatingWindowService extends Service {
             LinearLayout.LayoutParams.MATCH_PARENT,
             dp(30)
         ));
+        if (received && customerReplied && !replyMessage.isEmpty()) {
+            TextView replyView = new TextView(this);
+            replyView.setText("Khách: " + replyMessage);
+            replyView.setTextColor(0xFF455A64);
+            replyView.setTextSize(10);
+            replyView.setMaxLines(2);
+            replyView.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            replyView.setPadding(dp(2), dp(3), dp(2), dp(2));
+            replyView.setContentDescription("Nội dung khách nhắn: " + replyMessage);
+            row.addView(replyView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ));
+        }
         row.setBackgroundColor(received
             ? 0xFFE8F5E9
             : (simulated ? 0xFFFFF3E0 : (customerReplied ? 0xFFE3F2FD : 0xFFF4F4F4)));
@@ -946,6 +994,72 @@ public class FloatingWindowService extends Service {
         clipboard.setPrimaryClip(ClipData.newPlainText("Mã vận đơn", orderCode));
         Toast.makeText(this, "Đã sao chép mã vận đơn " + orderCode, Toast.LENGTH_SHORT).show();
         return true;
+    }
+
+    private void openSmsConversation(String rawPhone) {
+        String cleanPhone = rawPhone == null ? "" : rawPhone.replaceAll("[^0-9+]", "");
+        if (cleanPhone.isEmpty()) {
+            Toast.makeText(this, "Không có số điện thoại để mở tin nhắn", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        String smsPackage = Telephony.Sms.getDefaultSmsPackage(this);
+        boolean callLogHoldsSmsRole = false;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            RoleManager roles = getSystemService(RoleManager.class);
+            callLogHoldsSmsRole = roles != null && roles.isRoleHeld(RoleManager.ROLE_SMS);
+        }
+        callLogHoldsSmsRole = callLogHoldsSmsRole || getPackageName().equals(smsPackage);
+        if (callLogHoldsSmsRole) {
+            smsPackage = getSharedPreferences("fake_sms_role", MODE_PRIVATE)
+                .getString("previous_sms_package", "");
+        }
+        if (smsPackage == null || smsPackage.isEmpty() || getPackageName().equals(smsPackage)) {
+            Intent sendTo = new Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:"));
+            android.content.pm.ResolveInfo resolved = getPackageManager().resolveActivity(
+                sendTo, PackageManager.MATCH_DEFAULT_ONLY);
+            if (resolved != null && resolved.activityInfo != null
+                && !getPackageName().equals(resolved.activityInfo.packageName)) {
+                smsPackage = resolved.activityInfo.packageName;
+            }
+        }
+        if (callLogHoldsSmsRole && (smsPackage == null || smsPackage.isEmpty()
+            || getPackageName().equals(smsPackage))) {
+            Toast.makeText(this, "Hãy chọn lại ứng dụng SMS thường dùng để mở hội thoại", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        Intent intent = new Intent(
+            Intent.ACTION_VIEW,
+            Uri.fromParts("sms", cleanPhone, null)
+        );
+        if (smsPackage != null && !smsPackage.isEmpty()
+            && !getPackageName().equals(smsPackage)) {
+            intent.setPackage(smsPackage);
+        }
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            startActivity(intent);
+        } catch (Exception error) {
+            Log.e(TAG, "Could not open SMS conversation", error);
+            Toast.makeText(this, "Không mở được ứng dụng SMS", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void openPaymentPod(String recordId, String imagePath) {
+        if (imagePath == null || imagePath.isEmpty() || !new java.io.File(imagePath).isFile()) {
+            Toast.makeText(this, "Đơn này chưa có ảnh POD", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        try {
+            Intent intent = new Intent(this, PaymentPodViewerActivity.class);
+            intent.putExtra(PaymentPodViewerActivity.EXTRA_RECORD_ID, recordId);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+        } catch (Exception error) {
+            Log.e(TAG, "Could not open POD image", error);
+            Toast.makeText(this, "Không mở được ảnh POD", Toast.LENGTH_SHORT).show();
+        }
     }
 
     private void openTimeMarkCamera() {
@@ -1092,9 +1206,7 @@ public class FloatingWindowService extends Service {
         // multipart SMS, which the previous single-part send path rejected.
         String message = template + amount + " VND";
 
-        final boolean isFakeMode = getPrefs().getBoolean("sms_fake_mode", false);
-
-        if (!isFakeMode && ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
             Toast.makeText(this, "⚠️ Chưa cấp quyền gửi SMS. Hãy cấp quyền trong App!", Toast.LENGTH_LONG).show();
             hideSmsInput();
             return;
@@ -1102,27 +1214,6 @@ public class FloatingWindowService extends Service {
 
         final String finalCleanPhone = cleanPhone;
         final String finalAmount = amount;
-        if (isFakeMode) {
-            if (!LicenseManager.isSmsFeatureAvailable(this)) {
-                Toast.makeText(this, "⚠️ Đã hết 10 lượt trải nghiệm SMS ảo. Vui lòng mở App để kích hoạt bản quyền!", Toast.LENGTH_LONG).show();
-                hideSmsInput();
-                return;
-            }
-            try {
-                Intent fakeIntent = new Intent(this, FakeSmsRoleActivity.class);
-                fakeIntent.putExtra(FakeSmsRoleActivity.EXTRA_PHONE, finalCleanPhone);
-                fakeIntent.putExtra(FakeSmsRoleActivity.EXTRA_AMOUNT, finalAmount);
-                fakeIntent.putExtra(FakeSmsRoleActivity.EXTRA_MESSAGE, message);
-                fakeIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(fakeIntent);
-            } catch (Exception error) {
-                Log.e(TAG, "Cannot start fake SMS role request", error);
-                Toast.makeText(this, "Không mở được bước tạo SMS ảo", Toast.LENGTH_LONG).show();
-            }
-            hideSmsInput();
-            return;
-        }
-
         String sessionId = PaymentTrackingStore.createSmsSession(this, finalCleanPhone, finalAmount, message);
         if (sessionId.isEmpty()) {
             Toast.makeText(this, "Không lưu được phiên nhắn tin", Toast.LENGTH_LONG).show();
