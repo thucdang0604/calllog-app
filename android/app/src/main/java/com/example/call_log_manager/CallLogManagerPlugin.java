@@ -2,6 +2,7 @@ package com.example.call_log_manager;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.role.RoleManager;
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
@@ -19,6 +20,7 @@ import android.os.Bundle;
 import android.provider.MediaStore;
 import android.provider.CallLog;
 import android.provider.Settings;
+import android.provider.Telephony;
 import android.util.Log;
 
 import org.json.JSONArray;
@@ -155,6 +157,12 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
                 break;
             case "openSmsConversation":
                 openSmsConversation(call, result);
+                break;
+            case "isCallLogDefaultSmsApp":
+                result.success(isCallLogDefaultSmsApp());
+                break;
+            case "openSmsDefaultSettings":
+                openSmsDefaultSettings(result);
                 break;
             case "hasSmsPermission":
                 hasSmsPermission(result);
@@ -542,6 +550,30 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
             result.success(true);
         } catch (Exception e) {
             result.error("OPEN_SMS_ERROR", "Không mở được hội thoại SMS trên thiết bị", e.getMessage());
+        }
+    }
+
+    private boolean isCallLogDefaultSmsApp() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            RoleManager roleManager = context.getSystemService(RoleManager.class);
+            return roleManager != null && roleManager.isRoleHeld(RoleManager.ROLE_SMS);
+        }
+        return context.getPackageName().equals(Telephony.Sms.getDefaultSmsPackage(context));
+    }
+
+    private void openSmsDefaultSettings(Result result) {
+        try {
+            Intent intent = new Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS);
+            if (activity != null) {
+                activity.startActivity(intent);
+            } else {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                context.startActivity(intent);
+            }
+            result.success(true);
+        } catch (Exception error) {
+            Log.e("CallLogManagerPlugin", "Could not open default SMS settings", error);
+            result.error("OPEN_SMS_SETTINGS_ERROR", "Không mở được cài đặt ứng dụng mặc định", null);
         }
     }
 

@@ -21,12 +21,14 @@ class SimpleHomeScreen extends StatefulWidget {
 class _SimpleHomeScreenState extends State<SimpleHomeScreen>
     with WidgetsBindingObserver {
   final AppUpdateService _appUpdateService = AppUpdateService();
+  bool _isCallLogDefaultSmsApp = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _refreshDefaultSmsStatus();
       _loadCallLogs(force: false);
       _checkForAppUpdate();
     });
@@ -35,6 +37,7 @@ class _SimpleHomeScreenState extends State<SimpleHomeScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      _refreshDefaultSmsStatus();
       _appUpdateService.resumePendingInstallation(context);
       _checkForAppUpdate(delay: false);
     }
@@ -53,6 +56,31 @@ class _SimpleHomeScreenState extends State<SimpleHomeScreen>
     if (delay) await Future<void>.delayed(const Duration(seconds: 3));
     if (!mounted) return;
     await _appUpdateService.checkForUpdate(context, forceCheck: forceCheck);
+  }
+
+  Future<void> _refreshDefaultSmsStatus() async {
+    try {
+      const channel = MethodChannel('call_log_manager');
+      final isDefault =
+          await channel.invokeMethod<bool>('isCallLogDefaultSmsApp') ?? false;
+      if (mounted && isDefault != _isCallLogDefaultSmsApp) {
+        setState(() => _isCallLogDefaultSmsApp = isDefault);
+      }
+    } on PlatformException {
+      // The warning is optional on devices that do not expose SMS role status.
+    }
+  }
+
+  Future<void> _openDefaultSmsSettings() async {
+    try {
+      const channel = MethodChannel('call_log_manager');
+      await channel.invokeMethod<bool>('openSmsDefaultSettings');
+    } on PlatformException {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Không mở được cài đặt ứng dụng SMS.')),
+      );
+    }
   }
 
   Future<void> _loadCallLogs({bool force = true}) async {
@@ -80,6 +108,44 @@ class _SimpleHomeScreenState extends State<SimpleHomeScreen>
         ),
         backgroundColor: Colors.blue[700],
         elevation: 2,
+        bottom: _isCallLogDefaultSmsApp
+            ? PreferredSize(
+                preferredSize: const Size.fromHeight(56),
+                child: Container(
+                  color: const Color(0xFFFFF3CD),
+                  padding: const EdgeInsets.only(left: 12, right: 4),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.warning_amber_rounded,
+                        color: Color(0xFF9A6500),
+                        size: 21,
+                      ),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text(
+                          'CallLog đang là app SMS mặc định; tin mới có thể không báo.',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Color(0xFF684700),
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: _openDefaultSmsSettings,
+                        tooltip: 'Đổi ứng dụng SMS mặc định',
+                        icon: const Icon(
+                          Icons.settings_outlined,
+                          color: Color(0xFF684700),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            : null,
         actions: [
           IconButton(
             icon: const Icon(Icons.system_update, color: Colors.white),
