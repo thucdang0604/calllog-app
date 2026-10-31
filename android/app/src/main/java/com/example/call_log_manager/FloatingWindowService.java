@@ -34,6 +34,7 @@ import android.telephony.SmsManager;
 import android.telephony.TelephonyManager;
 import android.view.Gravity;
 import android.view.LayoutInflater;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
@@ -87,9 +88,10 @@ public class FloatingWindowService extends Service {
     private Button paymentTrackingButton;
     private TextView paymentPendingTab;
     private TextView paymentReceivedTab;
+    private TextView panelResizeHandle;
     private LinearLayout smsInputContainer;
     private EditText amountInput;
-    private Button sendSmsButton, cancelSmsButton;
+    private Button sendSmsButton, sendZaloButton, cancelSmsButton;
 
     // === Cached objects - giảm repeated lookups ===
     private LayoutInflater cachedInflater;
@@ -272,37 +274,162 @@ public class FloatingWindowService extends Service {
         return getResources().getDisplayMetrics().heightPixels;
     }
 
-    private boolean isShortScreen() {
-        return getAvailableScreenHeight() < dp(600);
-    }
-
     private int getPanelWidth() {
         // Keep the panel within the display even on narrow/low-resolution devices.
         int availableWidth = Math.max(dp(1), getAvailableScreenWidth() - dp(16));
-        int proportionalWidth = (int) (getAvailableScreenWidth() * 0.62f);
-        int preferredWidth = Math.min(dp(216), Math.max(dp(146), proportionalWidth));
+        int proportionalWidth = (int) (getAvailableScreenWidth() * 0.56f);
+        int preferredWidth = Math.min(dp(196), Math.max(dp(150), proportionalWidth));
+        if (panelExpanded) {
+            int savedWidthDp = getPrefs().getInt("expanded_panel_width_dp", 0);
+            if (savedWidthDp > 0) {
+                preferredWidth = Math.max(dp(150), dp(savedWidthDp));
+            }
+        }
         return Math.min(availableWidth, preferredWidth);
     }
 
-    private int getCallListHeight() {
+    private void sizeHeaderActions() {
+        if (floatingView == null) return;
+        int buttonSize = Math.max(dp(26), Math.min(dp(40), (getPanelWidth() - dp(36)) / 5));
+        int[] buttonIds = {
+            R.id.batch_update_button,
+            R.id.payment_tracking_button,
+            R.id.quick_timemark_button,
+            R.id.toggle_panel_button,
+            R.id.close_button
+        };
+        for (int buttonId : buttonIds) {
+            View button = floatingView.findViewById(buttonId);
+            if (button == null) continue;
+            LinearLayout.LayoutParams params = (LinearLayout.LayoutParams) button.getLayoutParams();
+            params.width = buttonSize;
+            params.height = buttonSize;
+            button.setLayoutParams(params);
+        }
+    }
+
+    private View.OnTouchListener createPanelResizeTouchListener() {
+        return new View.OnTouchListener() {
+            private int startX;
+            private int startWidth;
+            private int startContentHeight;
+            private float startTouchX;
+            private float startTouchY;
+            private boolean anchoredToRight;
+            private boolean resizeContent;
+            private boolean changed;
+
+            @Override
+            public boolean onTouch(View view, MotionEvent event) {
+                if (!panelExpanded || floatingView == null || windowParams == null
+                    || windowManager == null || callsScrollView == null) {
+                    return false;
+                }
+
+                if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                    startX = windowParams.x;
+                    startWidth = windowParams.width > 0 ? windowParams.width : floatingView.getWidth();
+                    startTouchX = event.getRawX();
+                    startTouchY = event.getRawY();
+                    anchoredToRight = startX + startWidth / 2 >= getAvailableScreenWidth() / 2;
+                    startContentHeight = callsScrollView.getLayoutParams().height;
+                    if (startContentHeight < 0) startContentHeight = 0;
+                    resizeContent = callsContainer != null && callsContainer.getChildCount() > 0;
+                    changed = false;
+                    return true;
+                }
+
+                if (event.getAction() == MotionEvent.ACTION_MOVE) {
+                    int horizontalDirection = anchoredToRight ? -1 : 1;
+                    int requestedWidth = startWidth
+                        + Math.round((event.getRawX() - startTouchX) * horizontalDirection);
+                    int screenWidth = getAvailableScreenWidth();
+                    int maximumWidth = Math.max(dp(150), screenWidth - dp(16));
+                    int minimumWidth = Math.min(dp(150), maximumWidth);
+                    int newWidth = Math.max(minimumWidth, Math.min(maximumWidth, requestedWidth));
+
+                    int newContentHeight = startContentHeight;
+                    if (resizeContent) {
+                        int maxContentHeight = Math.max(dp(48), getAvailableScreenHeight()
+                            - windowParams.y - dp(120));
+                        int requestedHeight = startContentHeight
+                            + Math.round(event.getRawY() - startTouchY);
+                        newContentHeight = Math.max(dp(48), Math.min(maxContentHeight, requestedHeight));
+                    }
+
+                    if (newWidth != windowParams.width || newContentHeight != startContentHeight) {
+                        changed = true;
+                        windowParams.width = newWidth;
+                        windowParams.x = anchoredToRight
+                            ? startX + startWidth - newWidth
+                            : startX;
+                        if (resizeContent) {
+                            callsScrollView.getLayoutParams().height = newContentHeight;
+                            callsScrollView.requestLayout();
+                        }
+                        try {
+                            windowManager.updateViewLayout(floatingView, windowParams);
+                        } catch (Exception ignored) {
+                        }
+                    }
+                    return true;
+                }
+
+                if (event.getAction() == MotionEvent.ACTION_UP
+                    || event.getAction() == MotionEvent.ACTION_CANCEL) {
+                    if (changed) {
+                        float density = getResources().getDisplayMetrics().density;
+                        SharedPreferences.Editor editor = getPrefs().edit()
+                            .putInt("expanded_panel_width_dp", Math.round(windowParams.width / density))
+                            .putInt("floating_x", windowParams.x)
+                            .putInt("floating_y", windowParams.y);
+                        if (resizeContent) {
+                            editor.putInt("expanded_panel_content_height_dp", Math.round(
+                                callsScrollView.getLayoutParams().height / density
+                            ));
+                        }
+                        editor.apply();
+                        floatingView.post(FloatingWindowService.this::keepOverlayOnScreen);
+                    }
+                    return true;
+                }
+                return true;
+            }
+        };
+    }
+
+    private int getExpandedContentHeightLimit() {
         final int screenHeight = getAvailableScreenHeight();
-        final float ratio = panelExpanded ? 0.19f : 0.12f;
-        final int minHeight = dp(panelExpanded ? 96 : 70);
-        final int maxHeight = dp(panelExpanded ? 112 : 76);
-        return Math.max(minHeight, Math.min(maxHeight, (int) (screenHeight * ratio)));
+        int maxHeight = Math.max(dp(80), Math.min(dp(300), screenHeight - dp(120)));
+        int savedHeightDp = getPrefs().getInt("expanded_panel_content_height_dp", 0);
+        if (savedHeightDp > 0) {
+            return Math.max(dp(48), Math.min(maxHeight, dp(savedHeightDp)));
+        }
+        return Math.max(dp(112), Math.min(dp(220), (int) (screenHeight * 0.22f)));
+    }
+
+    private int getCallListHeight(int callCount) {
+        if (callCount <= 0) return 0;
+        int rowContentHeight = dp(39) * callCount;
+        if (panelExpanded) {
+            return Math.min(rowContentHeight, getExpandedContentHeightLimit());
+        }
+        int compactLimit = Math.max(dp(78), Math.min(dp(120), (int) (getAvailableScreenHeight() * 0.16f)));
+        return Math.min(rowContentHeight, compactLimit);
     }
 
     private int getPaymentQueueHeight() {
-        int screenBasedHeight = (int) (getAvailableScreenHeight() * 0.25f);
+        if (panelExpanded) return getExpandedContentHeightLimit();
+        int screenBasedHeight = (int) (getAvailableScreenHeight() * 0.20f);
         int panelChromeHeight = dp(84);
         int contentBudget = Math.max(dp(40), getAvailableScreenHeight() - panelChromeHeight);
-        return Math.max(dp(40), Math.min(dp(148), Math.min(screenBasedHeight, contentBudget)));
+        return Math.max(dp(40), Math.min(dp(120), Math.min(screenBasedHeight, contentBudget)));
     }
 
     private int getOverlayCallCount() {
         if (bubbleMode) return 0;
         int requested = getDisplayCallCount();
-        if (!panelExpanded || isShortScreen()) return Math.min(2, requested);
+        if (!panelExpanded) return Math.min(2, requested);
         // The panel stays visually small; additional configured rows scroll inside it.
         return requested;
     }
@@ -379,11 +506,6 @@ public class FloatingWindowService extends Service {
     private void updateCallsUi(List<CallItemData> loadedCalls, int targetCount) {
         if (floatingView == null || bubbleMode || callsContainer == null || paymentQueueMode) return;
 
-        if (callsScrollView != null) {
-            callsScrollView.getLayoutParams().height = getCallListHeight();
-            callsScrollView.requestLayout();
-        }
-
         if (batchUpdateButton != null) {
             batchUpdateButton.setText("⚡");
         }
@@ -448,6 +570,11 @@ public class FloatingWindowService extends Service {
 
             currentCallHolders.add(holder);
             callsContainer.addView(itemView);
+        }
+
+        if (callsScrollView != null) {
+            callsScrollView.getLayoutParams().height = getCallListHeight(newCount);
+            callsScrollView.requestLayout();
         }
     }
 
@@ -638,7 +765,7 @@ public class FloatingWindowService extends Service {
         if (!canDrawOverlay()) return;
 
         bubbleMode = false;
-        panelExpanded = expanded && !isShortScreen();
+        panelExpanded = expanded;
         currentCallHolders.clear();
         try {
             replaceFloatingView(R.layout.floating_window, getPanelWidth(), WindowManager.LayoutParams.WRAP_CONTENT);
@@ -656,6 +783,7 @@ public class FloatingWindowService extends Service {
         paymentReceivedTab = floatingView.findViewById(R.id.payment_received_tab);
         batchUpdateButton = floatingView.findViewById(R.id.batch_update_button);
         paymentTrackingButton = floatingView.findViewById(R.id.payment_tracking_button);
+        sizeHeaderActions();
 
         if (paymentPendingTab != null) {
             paymentPendingTab.setOnClickListener(v -> {
@@ -677,7 +805,13 @@ public class FloatingWindowService extends Service {
         smsInputContainer = floatingView.findViewById(R.id.sms_input_container);
         amountInput = floatingView.findViewById(R.id.amount_input);
         sendSmsButton = floatingView.findViewById(R.id.send_sms_button);
+        sendZaloButton = floatingView.findViewById(R.id.send_zalo_button);
         cancelSmsButton = floatingView.findViewById(R.id.cancel_sms_button);
+        panelResizeHandle = floatingView.findViewById(R.id.panel_resize_handle);
+        if (panelResizeHandle != null) {
+            panelResizeHandle.setVisibility(panelExpanded ? View.VISIBLE : View.GONE);
+            panelResizeHandle.setOnTouchListener(createPanelResizeTouchListener());
+        }
 
         // Cập nhật text nút Batch Update
         if (batchUpdateButton != null) {
@@ -710,6 +844,7 @@ public class FloatingWindowService extends Service {
 
         // SMS action buttons
         if (sendSmsButton != null) sendSmsButton.setOnClickListener(v -> sendSms());
+        if (sendZaloButton != null) sendZaloButton.setOnClickListener(v -> sendZalo());
         if (cancelSmsButton != null) cancelSmsButton.setOnClickListener(v -> hideSmsInput());
 
         Button closeButton = floatingView.findViewById(R.id.close_button);
@@ -722,6 +857,10 @@ public class FloatingWindowService extends Service {
         View dragHandle = floatingView.findViewById(R.id.header_drag_handle);
         if (dragHandle != null) {
             dragHandle.setOnTouchListener(new FloatingTouchListener(windowManager, floatingView, this));
+        }
+        View rightDragHandle = floatingView.findViewById(R.id.header_drag_handle_right);
+        if (rightDragHandle != null) {
+            rightDragHandle.setOnTouchListener(new FloatingTouchListener(windowManager, floatingView, this));
         }
 
         registerCallLogObserver();
@@ -790,8 +929,10 @@ public class FloatingWindowService extends Service {
         for (int index = records.length() - 1; index >= 0; index--) {
             JSONObject record = records.optJSONObject(index);
             if (record == null) continue;
+            String channel = record.optString("channel", "sms");
             String smsStatus = record.optString("smsStatus");
-            if (!"sent".equals(smsStatus) && !"simulated".equals(smsStatus)) continue;
+            if ("sms".equals(channel)
+                && !"sent".equals(smsStatus) && !"simulated".equals(smsStatus)) continue;
 
             boolean received = "received".equals(record.optString("status"));
             if (received) receivedCount++;
@@ -820,7 +961,26 @@ public class FloatingWindowService extends Service {
             ));
         }
         if (callsScrollView != null) callsScrollView.scrollTo(0, 0);
+        fitScrollViewToContent(getPaymentQueueHeight());
         floatingView.post(this::keepOverlayOnScreen);
+    }
+
+    private void fitScrollViewToContent(int maximumHeight) {
+        if (callsContainer == null || callsScrollView == null) return;
+        int measuredWidth = callsScrollView.getMeasuredWidth();
+        if (measuredWidth <= 0) {
+            measuredWidth = Math.max(dp(1), getPanelWidth() - dp(8));
+        }
+        callsContainer.measure(
+            View.MeasureSpec.makeMeasureSpec(measuredWidth, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        );
+        int fittedHeight = Math.min(Math.max(0, maximumHeight), callsContainer.getMeasuredHeight());
+        if (callsScrollView.getLayoutParams().height != fittedHeight) {
+            callsScrollView.getLayoutParams().height = fittedHeight;
+            callsScrollView.requestLayout();
+            if (floatingView != null) floatingView.post(this::keepOverlayOnScreen);
+        }
     }
 
     private void updatePaymentQueueTabs(int pendingCount, int receivedCount) {
@@ -852,14 +1012,29 @@ public class FloatingWindowService extends Service {
         String replyMessage = record.optString("replyMessage", "").trim();
         String imagePath = record.optString("imagePath", "").trim();
         boolean simulated = "simulated".equals(record.optString("smsStatus"));
+        boolean zalo = "zalo".equals(record.optString("channel", "sms"));
+        String deliveryStatus = record.optString("deliveryStatus", "");
 
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.VERTICAL);
         row.setPadding(dp(6), dp(4), dp(6), dp(4));
 
         TextView orderView = new TextView(this);
-        orderView.setText((simulated ? "SMS ảo · " : (customerReplied ? "✉ Có phản hồi · " : ""))
+        orderView.setText((zalo ? "Zalo · " : (simulated ? "SMS ảo · " : (customerReplied ? "✉ Có phản hồi · " : "")))
             + (orderCode.isEmpty() ? "Chưa quét mã đơn" : "Đơn " + orderCode));
+        if (zalo) {
+            String statusText = "sent_confirmed".equals(deliveryStatus)
+                ? "đã gửi"
+                : ("draft_ready".equals(deliveryStatus)
+                    ? "QR đã sao chép · chờ gửi"
+                    : ("chat_opened".equals(deliveryStatus)
+                        ? "đã mở chat · chưa có QR"
+                        : ("awaiting_scan".equals(deliveryStatus)
+                            ? "chờ quét đơn"
+                            : "chờ xác nhận gửi")));
+            orderView.setText("Zalo · " + statusText + " · "
+                + (orderCode.isEmpty() ? "Chưa quét mã đơn" : "Đơn " + orderCode));
+        }
         orderView.setTextColor(0xFF222222);
         orderView.setTextSize(12);
         orderView.setSingleLine(true);
@@ -894,10 +1069,13 @@ public class FloatingWindowService extends Service {
                 detailsView.getPaintFlags() | android.graphics.Paint.UNDERLINE_TEXT_FLAG
             );
             detailsView.setContentDescription(
-                "Mở tin nhắn đã gửi tới số điện thoại có 4 số cuối "
+                "Mở " + (zalo ? "Zalo" : "tin nhắn SMS") + " tới số điện thoại có 4 số cuối "
                     + (lastFour.isEmpty() ? "không rõ" : lastFour)
             );
-            detailsView.setOnClickListener(v -> openSmsConversation(phone));
+            detailsView.setOnClickListener(v -> {
+                if (zalo) openZalo(phone);
+                else openSmsConversation(phone);
+            });
         }
 
         TextView amountView = new TextView(this);
@@ -928,18 +1106,18 @@ public class FloatingWindowService extends Service {
             }
         });
 
-        actionRow.addView(detailsView, new LinearLayout.LayoutParams(0, dp(30), 1f));
+        actionRow.addView(detailsView, new LinearLayout.LayoutParams(0, dp(36), 1f));
         if (!amount.isEmpty()) {
             LinearLayout.LayoutParams amountParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
-                dp(30)
+                dp(36)
             );
             amountParams.setMargins(dp(4), 0, dp(4), 0);
             actionRow.addView(amountView, amountParams);
         }
         actionRow.addView(receivedButton, new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT,
-            dp(30)
+            dp(36)
         ));
         row.addView(orderView, new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
@@ -1122,7 +1300,8 @@ public class FloatingWindowService extends Service {
         if (smsInputContainer != null) {
             smsInputContainer.setVisibility(View.VISIBLE);
             if (callsScrollView != null) callsScrollView.setVisibility(View.GONE);
-            TextView header = floatingView.findViewById(R.id.header_title);
+            if (panelResizeHandle != null) panelResizeHandle.setVisibility(View.GONE);
+            TextView header = floatingView.findViewById(R.id.header_drag_handle);
             if (header != null) header.setText("→ " + targetPhone);
             floatingView.post(this::keepOverlayOnScreen);
         }
@@ -1157,7 +1336,10 @@ public class FloatingWindowService extends Service {
         if (smsInputContainer != null) {
             smsInputContainer.setVisibility(View.GONE);
             if (callsScrollView != null) callsScrollView.setVisibility(View.VISIBLE);
-            TextView header = floatingView.findViewById(R.id.header_title);
+            if (panelResizeHandle != null) {
+                panelResizeHandle.setVisibility(panelExpanded ? View.VISIBLE : View.GONE);
+            }
+            TextView header = floatingView.findViewById(R.id.header_drag_handle);
             if (header != null) header.setText("•••");
             floatingView.post(this::keepOverlayOnScreen);
         }
@@ -1268,6 +1450,97 @@ public class FloatingWindowService extends Service {
         }
 
         hideSmsInput();
+    }
+
+    private void sendZalo() {
+        if (pendingSmsCallIndex < 0 || pendingSmsCallIndex >= currentCallHolders.size()) {
+            Toast.makeText(this, "Chưa chọn số điện thoại", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        CallItemHolder holder = currentCallHolders.get(pendingSmsCallIndex);
+        String targetPhone = holder.rawPhone;
+        if (targetPhone == null || targetPhone.isEmpty()) {
+            Toast.makeText(this, "Số điện thoại không hợp lệ", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String cleanPhone = targetPhone.replaceAll("[^0-9+]", "");
+        if (amountInput == null || amountInput.getText().toString().trim().isEmpty()) {
+            Toast.makeText(this, "Vui lòng nhập số tiền", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String amount = normalizePaymentAmount(amountInput.getText().toString().trim());
+        if (amount == null) {
+            Toast.makeText(this, "Số tiền không hợp lệ", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        if (sendZaloButton != null) {
+            sendZaloButton.setEnabled(false);
+            sendZaloButton.setText("…");
+        }
+        Toast.makeText(this, "Đang chuẩn bị thông tin chuyển khoản cho Zalo…", Toast.LENGTH_SHORT).show();
+        final String finalPhone = cleanPhone;
+        final String finalAmount = amount;
+        backgroundExecutor.execute(() -> {
+            final String sessionId;
+            try {
+                sessionId = PaymentQrShareManager.prepareAccountQrForZalo(
+                    FloatingWindowService.this,
+                    finalPhone,
+                    finalAmount
+                );
+            } catch (Exception error) {
+                Log.e(TAG, "Không thể chuẩn bị ảnh chuyển khoản cho chat Zalo", error);
+                mainHandler.post(() -> {
+                    if (sendZaloButton != null) {
+                        sendZaloButton.setEnabled(true);
+                        sendZaloButton.setText("Z");
+                    }
+                    Toast.makeText(FloatingWindowService.this, error.getMessage() == null
+                        ? "Không chuẩn bị được ảnh QR chuyển khoản"
+                        : error.getMessage(), Toast.LENGTH_LONG).show();
+                });
+                return;
+            }
+
+            mainHandler.post(() -> {
+                if (sendZaloButton != null) {
+                    sendZaloButton.setEnabled(true);
+                    sendZaloButton.setText("Z");
+                }
+                JSONObject session = PaymentTrackingStore.findRecord(
+                    FloatingWindowService.this,
+                    sessionId
+                );
+                String preparedMessage = session == null ? "" : session.optString("message", "");
+                String qrImagePath = session == null ? "" : session.optString("qrImagePath", "");
+                try {
+                    Intent scanIntent = new Intent(
+                        FloatingWindowService.this,
+                        OrderScanCaptureActivity.class
+                    );
+                    scanIntent.putExtra(OrderScanCaptureActivity.EXTRA_SESSION_ID, sessionId);
+                    scanIntent.putExtra(OrderScanCaptureActivity.EXTRA_PHONE, finalPhone);
+                    scanIntent.putExtra(OrderScanCaptureActivity.EXTRA_MESSAGE, preparedMessage);
+                    scanIntent.putExtra(OrderScanCaptureActivity.EXTRA_QR_IMAGE_PATH, qrImagePath);
+                    scanIntent.putExtra(OrderScanCaptureActivity.EXTRA_RETURN_TO_CHAT, true);
+                    scanIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+                    startActivity(scanIntent);
+                    performHapticFeedback();
+                    Toast.makeText(
+                        FloatingWindowService.this,
+                        "Quét đơn. Sau khi quét, CallLog sẽ mở Zalo theo số khách. Nếu có QR đã xác nhận, dán ảnh kèm số tiền rồi bấm Gửi.",
+                        Toast.LENGTH_LONG
+                    ).show();
+                    hideSmsInput();
+                } catch (Exception error) {
+                    Log.e(TAG, "Không thể mở màn quét mã đơn", error);
+                    Toast.makeText(FloatingWindowService.this,
+                        "Đã lưu thông tin chuyển khoản nhưng không mở được camera quét đơn.",
+                        Toast.LENGTH_LONG).show();
+                }
+            });
+        });
     }
 
     private String normalizePaymentAmount(String rawAmount) {

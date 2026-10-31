@@ -56,7 +56,7 @@ public final class LicenseManager {
 
     /**
      * Generates a unique, persistent hardware-bound Device ID.
-     * Format: SMS-XXXX-XXXX (8 hex characters)
+     * Format: SMS-XXXXXXXX-XXXXXXXX (16 hex characters)
      */
     public static synchronized String getDeviceId(Context context) {
         try {
@@ -79,7 +79,7 @@ public final class LicenseManager {
             return "SMS-" + sb.toString();
         } catch (Exception e) {
             Log.e(TAG, "Error generating device ID", e);
-            return "SMS-0000-0000";
+            return "SMS-00000000-00000000";
         }
     }
 

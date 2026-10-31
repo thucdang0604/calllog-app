@@ -4,6 +4,12 @@ const admin = require('firebase-admin');
 const { Firestore, FieldValue } = require('@google-cloud/firestore');
 const { defineSecret, defineString } = require('firebase-functions/params');
 const { onRequest } = require('firebase-functions/v2/https');
+const {
+  createOrReusePendingOrder,
+  isValidPaymentCode,
+  timestampMillis,
+} = require('./pending_orders');
+const { createKeyedRateLimiter } = require('./rate_limiter');
 
 admin.initializeApp();
 
@@ -11,7 +17,6 @@ const db = new Firestore({
   projectId: admin.app().options.projectId || process.env.GCLOUD_PROJECT,
   databaseId: 'default',
 });
-const SEPAY_WEBHOOK_SECRET = defineSecret('NVPTTT_SEPAY_WEBHOOK_SECRET');
 const LICENSE_SIGNING_PRIVATE_KEY = defineSecret('NVPTTT_LICENSE_SIGNING_PRIVATE_KEY');
 const TELEGRAM_BOT_TOKEN = defineSecret('NVPTTT_TELEGRAM_BOT_TOKEN');
 const TELEGRAM_WEBHOOK_SECRET = defineSecret('NVPTTT_TELEGRAM_WEBHOOK_SECRET');
@@ -20,7 +25,6 @@ const BANK_ACCOUNT_NUMBER = defineString('BANK_ACCOUNT_NUMBER', { default: '1903
 const BANK_BIN = defineString('BANK_BIN', { default: '970407' });
 const BANK_ACCOUNT_NAME = defineString('BANK_ACCOUNT_NAME', { default: 'DANG TRI THUC' });
 
-const PAYMENT_PREFIX = 'NVPTTT';
 const ADMIN_EMAIL = 'thucdang2205@gmail.com';
 const OFFLINE_GRACE_MS = 24 * 60 * 60 * 1000;
 const PLANS = Object.freeze({
@@ -33,12 +37,42 @@ const PLANS = Object.freeze({
 const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '64kb' }));
-const webhookApp = express();
-webhookApp.disable('x-powered-by');
-webhookApp.use(express.json({ limit: '64kb' }));
 const telegramApp = express();
 telegramApp.disable('x-powered-by');
 telegramApp.use(express.json({ limit: '64kb' }));
+
+function createInstanceRateLimiter(maxRequests, windowMs = 60_000) {
+  let windowStartedAt = 0;
+  let requestCount = 0;
+  return (_req, res, next) => {
+    const now = Date.now();
+    if (now - windowStartedAt >= windowMs) {
+      windowStartedAt = now;
+      requestCount = 0;
+    }
+    if (requestCount >= maxRequests) {
+      res.set('Retry-After', String(Math.max(1, Math.ceil((windowStartedAt + windowMs - now) / 1000))));
+      return sendError(res, 429, 'Máy chủ đang nhận quá nhiều yêu cầu. Hãy thử lại sau.');
+    }
+    requestCount += 1;
+    return next();
+  };
+}
+
+// shortcut: X-Forwarded-For can be client-supplied, so this only limits bursts; use App Check when compatible clients are available.
+app.use(createKeyedRateLimiter(
+  120,
+  60_000,
+  (req) => String(req.get('X-Forwarded-For') || '').split(',')[0].trim(),
+));
+// Keep the shared cap as an emergency cost guard; normal clients are limited per IP and device.
+app.use(createInstanceRateLimiter(1200));
+telegramApp.use(createInstanceRateLimiter(60));
+const adminOverviewRateLimiter = createKeyedRateLimiter(
+  12,
+  60_000,
+  (req) => String(req.get('Authorization') || ''),
+);
 
 function sendError(res, status, message) {
   return res.status(status).json({ success: false, error: message });
@@ -49,30 +83,15 @@ function normalizeDeviceId(value) {
 }
 
 function isValidDeviceId(value) {
-  return /^SMS-[A-F0-9]{4}-[A-F0-9]{4}$/.test(value);
+  return /^SMS-(?:[A-F0-9]{4}-[A-F0-9]{4}|[A-F0-9]{8}-[A-F0-9]{8})$/.test(value);
 }
 
 function normalizeAccountNumber(value) {
   return String(value || '').replace(/\D/g, '');
 }
 
-function timestampMillis(value) {
-  if (!value) return null;
-  if (typeof value.toMillis === 'function') return value.toMillis();
-  if (typeof value === 'number') return value;
-  return null;
-}
-
 function planDetails(planId) {
   return Object.prototype.hasOwnProperty.call(PLANS, planId) ? PLANS[planId] : null;
-}
-
-function isValidPaymentCode(value) {
-  return /^NVPTTT[A-F0-9]{16}$/.test(value);
-}
-
-function makePaymentCode() {
-  return `${PAYMENT_PREFIX}${crypto.randomBytes(8).toString('hex').toUpperCase()}`;
 }
 
 function buildQrUrl(paymentCode, amount) {
@@ -135,29 +154,6 @@ function makeLicenseRecord(deviceId, planId, existing, source, transactionId = n
   };
 }
 
-function sepaySignatureIsValid(req) {
-  const signatureHeader = String(req.get('X-SePay-Signature') || '').trim();
-  const timestampHeader = String(req.get('X-SePay-Timestamp') || '').trim();
-  const timestamp = Number(timestampHeader);
-  if (!/^sha256=[a-f0-9]{64}$/i.test(signatureHeader) || !Number.isFinite(timestamp)) return false;
-  if (Math.abs(Date.now() - timestamp * 1000) > 5 * 60 * 1000) return false;
-  if (!Buffer.isBuffer(req.rawBody)) return false;
-
-  const secret = SEPAY_WEBHOOK_SECRET.value();
-  const digest = crypto.createHmac('sha256', secret)
-    .update(`${timestampHeader}.${req.rawBody.toString('utf8')}`)
-    .digest('hex');
-  const expected = Buffer.from(`sha256=${digest.toLowerCase()}`);
-  const supplied = Buffer.from(signatureHeader.toLowerCase());
-  return expected.length === supplied.length && crypto.timingSafeEqual(expected, supplied);
-}
-
-function extractPaymentCode(payload) {
-  const text = `${payload.code || ''} ${payload.content || ''}`.toUpperCase();
-  const match = text.match(/\bNVPTTT[A-F0-9]{16}\b/);
-  return match ? match[0] : '';
-}
-
 function serializeDoc(snapshot) {
   const data = snapshot.data();
   return {
@@ -193,7 +189,11 @@ async function requireAdmin(req, res) {
   }
 }
 
-app.post('/api/orders', async (req, res) => {
+app.post('/api/orders', createKeyedRateLimiter(
+  6,
+  60_000,
+  (req) => normalizeDeviceId(req.body?.deviceId),
+), async (req, res) => {
   const deviceId = normalizeDeviceId(req.body?.deviceId);
   const planId = String(req.body?.plan || '').trim().toUpperCase();
   const plan = planDetails(planId);
@@ -202,37 +202,28 @@ app.post('/api/orders', async (req, res) => {
   if (!BANK_ACCOUNT_NUMBER.value().trim()) return sendError(res, 503, 'Chưa cấu hình tài khoản nhận tiền.');
 
   try {
-    let paymentCode = makePaymentCode();
-    let orderRef = db.collection('orders').doc(paymentCode);
-    for (let attempt = 0; attempt < 3 && (await orderRef.get()).exists; attempt += 1) {
-      paymentCode = makePaymentCode();
-      orderRef = db.collection('orders').doc(paymentCode);
-    }
-    const record = {
-      paymentCode,
+    const accountNumber = BANK_ACCOUNT_NUMBER.value().trim();
+    const accountName = BANK_ACCOUNT_NAME.value().trim();
+    const { record, reused } = await createOrReusePendingOrder({
+      db,
       deviceId,
-      plan: planId,
-      planTitle: plan.title,
-      amount: plan.amount,
-      status: 'pending',
-      manualReview: true,
-      bank: 'Techcombank',
-      accountNumber: BANK_ACCOUNT_NUMBER.value().trim(),
-      accountName: BANK_ACCOUNT_NAME.value().trim(),
-      createdAt: FieldValue.serverTimestamp(),
-      expiresAt: null,
-    };
-    await orderRef.create(record);
+      planId,
+      plan,
+      accountNumber,
+      accountName,
+    });
+    const { paymentCode } = record;
     return res.json({
       success: true,
+      reused,
       paymentCode,
       deviceId,
       plan: planId,
       planTitle: plan.title,
       amount: plan.amount,
       bank: 'Techcombank',
-      accountNumber: record.accountNumber,
-      accountName: record.accountName,
+      accountNumber,
+      accountName,
       transferContent: paymentCode,
       telegramMessage: [
         'Yêu cầu kích hoạt bản quyền SMS',
@@ -250,7 +241,11 @@ app.post('/api/orders', async (req, res) => {
   }
 });
 
-app.post('/api/orders/status', async (req, res) => {
+app.post('/api/orders/status', createKeyedRateLimiter(
+  8,
+  60_000,
+  (req) => `${normalizeDeviceId(req.body?.deviceId)}:${String(req.body?.paymentCode || '').trim().toUpperCase()}`,
+), async (req, res) => {
   const deviceId = normalizeDeviceId(req.body?.deviceId);
   const paymentCode = String(req.body?.paymentCode || '').trim().toUpperCase();
   if (!isValidDeviceId(deviceId) || !isValidPaymentCode(paymentCode)) {
@@ -282,7 +277,11 @@ app.post('/api/orders/status', async (req, res) => {
   }
 });
 
-app.post('/api/license/sync', async (req, res) => {
+app.post('/api/license/sync', createKeyedRateLimiter(
+  8,
+  60_000,
+  (req) => normalizeDeviceId(req.body?.deviceId),
+), async (req, res) => {
   const deviceId = normalizeDeviceId(req.body?.deviceId);
   if (!isValidDeviceId(deviceId)) return sendError(res, 400, 'Mã thiết bị không hợp lệ.');
   try {
@@ -305,80 +304,6 @@ app.post('/api/license/sync', async (req, res) => {
   } catch (error) {
     console.error('Could not sync license', error);
     return sendError(res, 500, 'Chưa đồng bộ được bản quyền.');
-  }
-});
-
-webhookApp.post('/api/webhook/sepay', async (req, res) => {
-  if (!sepaySignatureIsValid(req)) return sendError(res, 401, 'Chữ ký webhook không hợp lệ.');
-
-  const payload = req.body && typeof req.body === 'object'
-    ? req.body
-    : JSON.parse(req.rawBody.toString('utf8'));
-  const providerTransactionId = String(payload.id || '').trim();
-  if (!providerTransactionId) return sendError(res, 400, 'Webhook thiếu mã giao dịch.');
-
-  const transactionKey = crypto.createHash('sha256').update(providerTransactionId).digest('hex');
-  const transactionRef = db.collection('transactions').doc(transactionKey);
-  const paymentCode = extractPaymentCode(payload);
-  const orderRef = paymentCode ? db.collection('orders').doc(paymentCode) : null;
-  const now = Date.now();
-
-  try {
-    const result = await db.runTransaction(async (transaction) => {
-      const existingTransaction = await transaction.get(transactionRef);
-      if (existingTransaction.exists) return 'duplicate';
-
-      const transferAmount = Number(payload.transferAmount);
-      const destinationMatches = normalizeAccountNumber(payload.accountNumber) ===
-        normalizeAccountNumber(BANK_ACCOUNT_NUMBER.value());
-      const baseTransaction = {
-        provider: 'sepay',
-        providerTransactionId,
-        referenceCode: String(payload.referenceCode || ''),
-        paymentCode: paymentCode || null,
-        gateway: String(payload.gateway || ''),
-        accountNumber: normalizeAccountNumber(payload.accountNumber),
-        transferType: String(payload.transferType || ''),
-        transferAmount: Number.isFinite(transferAmount) ? transferAmount : 0,
-        content: String(payload.content || payload.description || '').slice(0, 1000),
-        receivedAt: FieldValue.serverTimestamp(),
-      };
-
-      const markUnmatched = (reason) => {
-        transaction.create(transactionRef, { ...baseTransaction, status: 'unmatched', reason });
-        return 'unmatched';
-      };
-
-      if (String(payload.transferType || '').toLowerCase() !== 'in') return markUnmatched('not_incoming');
-      if (!destinationMatches) return markUnmatched('wrong_destination_account');
-      if (!paymentCode || !orderRef) return markUnmatched('missing_payment_code');
-
-      const orderSnapshot = await transaction.get(orderRef);
-      if (!orderSnapshot.exists) return markUnmatched('unknown_payment_code');
-      const order = orderSnapshot.data();
-      if (order.status !== 'pending') return markUnmatched('order_not_pending');
-      if (order.expiresAt != null && order.expiresAt <= now) return markUnmatched('order_expired');
-      if (transferAmount !== order.amount) return markUnmatched('amount_mismatch');
-
-      const licenseRef = db.collection('licenses').doc(order.deviceId);
-      const licenseSnapshot = await transaction.get(licenseRef);
-      const existingLicense = licenseSnapshot.exists ? licenseSnapshot.data() : null;
-      const licenseRecord = makeLicenseRecord(order.deviceId, order.plan, existingLicense, 'payment', providerTransactionId);
-      transaction.create(transactionRef, { ...baseTransaction, status: 'matched', deviceId: order.deviceId, plan: order.plan });
-      transaction.update(orderRef, {
-        status: 'paid',
-        providerTransactionId,
-        paidAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-      transaction.set(licenseRef, licenseRecord);
-      return 'matched';
-    });
-
-    return res.status(200).json({ success: true, result });
-  } catch (error) {
-    console.error('Could not process SePay transaction', error);
-    return sendError(res, 500, 'Không xử lý được webhook. SePay có thể gửi lại giao dịch này.');
   }
 });
 
@@ -679,10 +604,21 @@ async function handleTelegramUpdate(update) {
     return;
   }
 
-  const deviceId = (text.match(/\bSMS-[A-F0-9]{4}-[A-F0-9]{4}\b/i) || [])[0]?.toUpperCase() || '';
-  const paymentCode = (text.match(/\bNVPTTT[A-F0-9]{16}\b/i) || [])[0]?.toUpperCase() || '';
+  const deviceMatch = text.match(/\bSMS\s*-\s*([A-F0-9]{4}|[A-F0-9]{8})\s*-\s*([A-F0-9]{4}|[A-F0-9]{8})\b/i);
+  const deviceId = deviceMatch && deviceMatch[1].length === deviceMatch[2].length
+    ? `SMS-${deviceMatch[1]}-${deviceMatch[2]}`.toUpperCase()
+    : '';
+  const paymentMatch = text.match(/\bNVPTTT[A-F0-9]{15,16}\b/i);
+  const paymentCode = paymentMatch?.[0]?.toUpperCase() || '';
   if (!deviceId || !paymentCode) {
-    await sendTelegramMessage(chatId, 'Hãy gửi thông tin do app sao chép, gồm Mã máy và Mã đơn.');
+    const suppliedPaymentCode = text.match(/\bNVPTTT([A-F0-9]+)\b/i);
+    if (!deviceId) {
+      await sendTelegramMessage(chatId, 'Không đọc được mã máy. Hãy gửi lại bằng nút “Gửi mã máy qua Telegram” trong app; bot chấp nhận mã dạng SMS-XXXXXXXX-XXXXXXXX kể cả có khoảng trắng quanh dấu gạch.');
+    } else if (suppliedPaymentCode) {
+      await sendTelegramMessage(chatId, `Mã đơn có ${suppliedPaymentCode[1].length} ký tự sau NVPTTT; mã phải có 15 hoặc 16 ký tự hex. Hãy gửi lại bằng nút “Gửi mã máy qua Telegram” trong app.`);
+    } else {
+      await sendTelegramMessage(chatId, 'Không tìm thấy mã đơn. Hãy gửi lại bằng nút “Gửi mã máy qua Telegram” trong app để gửi cả Mã máy và Mã đơn.');
+    }
     return;
   }
 
@@ -716,6 +652,12 @@ telegramApp.post('/api/webhook/telegram', async (req, res) => {
 app.get('/api/admin/overview', async (req, res) => {
   const adminEmail = await requireAdmin(req, res);
   if (!adminEmail) return;
+  let isAllowed = false;
+  adminOverviewRateLimiter(req, res, () => {
+    isAllowed = true;
+  });
+  if (!isAllowed) return;
+
   try {
     const [licenseSnapshot, orderSnapshot, transactionSnapshot] = await Promise.all([
       db.collection('licenses').orderBy('updatedAt', 'desc').limit(500).get(),
@@ -818,31 +760,22 @@ app.use((error, _req, res, _next) => {
   return sendError(res, 500, 'Có lỗi phía máy chủ.');
 });
 
-webhookApp.use((error, _req, res, _next) => {
-  console.error('Unhandled SePay webhook error', error);
-  return sendError(res, 500, 'Không xử lý được webhook.');
-});
-
 exports.licenseApi = onRequest({
   region: 'asia-southeast1',
   secrets: [LICENSE_SIGNING_PRIVATE_KEY],
-  timeoutSeconds: 30,
+  timeoutSeconds: 20,
   memory: '256MiB',
-  maxInstances: 5,
+  minInstances: 0,
+  maxInstances: 1,
+  concurrency: 20,
 }, app);
-
-exports.sepayWebhook = onRequest({
-  region: 'asia-southeast1',
-  secrets: [SEPAY_WEBHOOK_SECRET],
-  timeoutSeconds: 30,
-  memory: '256MiB',
-  maxInstances: 3,
-}, webhookApp);
 
 exports.telegramWebhook = onRequest({
   region: 'asia-southeast1',
   secrets: [TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET, LICENSE_SIGNING_PRIVATE_KEY],
-  timeoutSeconds: 30,
+  timeoutSeconds: 20,
   memory: '256MiB',
-  maxInstances: 2,
+  minInstances: 0,
+  maxInstances: 1,
+  concurrency: 20,
 }, telegramApp);

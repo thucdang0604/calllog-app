@@ -180,6 +180,7 @@
     </application>
     
     <queries>
+        <package android:name="com.zing.zalo" />
         <package android:name="com.mpds" />
         <intent>
             <action android:name="android.intent.action.SENDTO" />

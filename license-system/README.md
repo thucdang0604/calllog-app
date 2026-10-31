@@ -19,10 +19,14 @@ Each purchase order has a unique memo beginning with `NVPTTT`. Orders stay pendi
 2. From this directory run `firebase use --add` and select the project.
 3. Google sign-in is the only enabled provider. There is no account-creation flow. The management API accepts only the verified Google account `thucdang2205@gmail.com` and rejects tokens from all other providers. If reusing this project, Firebase CLI enables providers from `firebase.json` but does not disable previously enabled providers; disable Email/Password in Authentication settings as well.
 4. The receiving account is prefilled from the existing app QR (`19034108972011`, Techcombank BIN `970407`, account name `DANG TRI THUC`); change it if that is no longer the intended account.
-5. `NVPTTT_SEPAY_WEBHOOK_SECRET` is only needed if you later switch to a bank supported by SePay. Do not configure the current Techcombank account as a SePay webhook source.
+5. The SePay webhook is not deployed because the current Techcombank flow requires manual review.
 6. A signing pair has been provisioned in this working copy. Its private key is kept only in `.secrets/license-signing-private.pem` (ignored by Git), and its public key is embedded in the Android app. Add the complete PEM private key as the `NVPTTT_LICENSE_SIGNING_PRIVATE_KEY` secret using Firebase / Google Cloud Secret Manager. Never commit or send the private key in chat. On a fresh checkout where the private key is absent, run `node scripts/generate-signing-key.js`; it creates a new private key and updates both public key files. Rebuild the Android app after generating a new pair.
 7. `public/config.js` contains the Firebase Web app configuration. These values are public client configuration; admin access is enforced by verified Firebase ID tokens, the fixed email allowlist, and the Google sign-in provider claim on the server.
 8. Deploy with `firebase deploy --only auth,functions,firestore:rules,hosting --project mylove-2026`.
+
+The HTTP functions have bounded instances (license API: 1; Telegram: 1), no warm instances, short timeouts, and in-memory request limits. The admin overview is limited to 12 reads per minute per signed-in token because each refresh can read up to 1,100 documents. Artifact Registry cleanup is configured to remove stored function deployment images after 1 day; deployed functions keep their runtime image. The Cloud Functions spend cap is 25,000 VND/month; a separate 25,000 VND/month project-wide budget only sends alerts and does not stop other services.
+
+App Check is not enforced for the mobile license API. The Android client is not registered in Firebase, and Play Integrity setup requires the app to be linked through Google Play Console even when distributing APKs outside Play. Do not enforce App Check until a production provider is configured and a compatible APK has been distributed; existing clients do not send App Check tokens.
 
 The first deployment may prompt for the non-secret string parameters. A `.env.<project-id>` file can be used for local emulator values; it is ignored by Git. Do not put private keys, service account files, or SePay secrets in the web folder.
 
@@ -32,14 +36,14 @@ The current receiving account is Techcombank (`19034108972011`), but SePay's cur
 
 Current manual-review flow:
 
-- The app creates a pending order and displays a QR, transfer memo, device ID, and order details. The order does not expire while awaiting manual review.
-- The customer can share the device ID and order details from the app through Telegram. Until the bot credentials are configured, use the management page to review pending orders.
+- The app creates a pending order and displays a QR, transfer memo, device ID, and order details. Repeated requests for the same device and plan reuse that pending order. The order does not expire while awaiting manual review.
+- The customer can share the device ID and order details from the app through Telegram. The deployed bot can record the order and send the activation code after manual approval.
 - Open `https://mylove-2026-sms-admin.web.app/`, inspect the Techcombank account statement, and only then use **Xác nhận đã nhận tiền** for the matching order. The backend records the approver and activates the license in one Firestore transaction.
-- While the purchase dialog is open, the app checks order state every 30 seconds and applies a server-signed license after approval. The customer can also paste a server-signed token from Telegram in the activation field if bot delivery is added later.
+- While the purchase dialog is open, the app checks order state immediately and then every 5 minutes for up to 15 minutes. The customer can still request a manual status check or paste a server-signed Telegram token in the activation field.
 
 ## Telegram bot
 
-The webhook code is ready but is not deployed until a bot token and owner Telegram user ID are configured. Customers send the app's copied message (device ID and order code) to the bot. The owner can use `/choxacnhan`, then `/duyet MÃ_ĐƠN` only after checking the bank statement. The bot sends a device-bound signed activation token; `/gui MÃ_ĐƠN` resends it, and the customer can use `/code MÃ_ĐƠN` to request it again. Telegram linkage is stored on the existing order document; the bot does not create a separate customer/session collection.
+The webhook and bot are deployed with the bot token and owner Telegram user ID configured. Customers send the app's copied message (device ID and order code) to the bot. The owner can use `/choxacnhan`, then `/duyet MÃ_ĐƠN` only after checking the bank statement. The bot sends a device-bound signed activation token; `/gui MÃ_ĐƠN` resends it, and the customer can use `/code MÃ_ĐƠN` to request it again. Telegram linkage is stored on the existing order document; the bot does not create a separate customer/session collection.
 
 Setup after creating a bot with `@BotFather`:
 
@@ -62,7 +66,7 @@ cd ..
 flutter build apk --release
 ```
 
-The app syncs a server-signed entitlement on launch and when returning to the app. While a purchase dialog is open, it checks order status every 30 seconds and updates the local SMS gate after manual approval. The signed entitlement is cached with a 24-hour offline grace. The server signing key remains in Secret Manager; the APK contains only the public key. The app release must be built with `LICENSE_API_BASE_URL` pointing to the deployed Hosting `/api` URL.
+The app syncs a server-signed entitlement on launch and when returning to the app, at most every 12 hours after a successful sync. For three days after creating an order, resumed sessions may sync every 5 minutes so a late manual approval is noticed. Opening the license dialog requests an immediate sync; while the purchase dialog is open, it also checks order status every 5 minutes for up to 15 minutes. The signed entitlement is cached with a 24-hour offline grace. The server signing key remains in Secret Manager; the APK contains only the public key. The app release must be built with `LICENSE_API_BASE_URL` pointing to the deployed Hosting `/api` URL.
 
 ## Admin page
 

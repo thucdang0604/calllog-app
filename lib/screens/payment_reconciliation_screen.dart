@@ -4,6 +4,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'payment_account_settings_screen.dart';
+
 String _formatPaymentTime(int timestamp) {
   final date = DateTime.fromMillisecondsSinceEpoch(timestamp).toLocal();
   final day = date.day.toString().padLeft(2, '0');
@@ -11,6 +13,23 @@ String _formatPaymentTime(int timestamp) {
   final hour = date.hour.toString().padLeft(2, '0');
   final minute = date.minute.toString().padLeft(2, '0');
   return '$day/$month/${date.year} $hour:$minute';
+}
+
+String _zaloStatusLabel(String status) {
+  switch (status) {
+    case 'share_opened':
+      return 'Đã mở luồng chia sẻ Zalo';
+    case 'awaiting_scan':
+      return 'Đang chờ quét mã đơn';
+    case 'draft_ready':
+      return 'QR kèm số tiền đã sao chép; chờ gửi trong chat';
+    case 'chat_opened':
+      return 'Đã mở chat Zalo; chưa có QR đã xác nhận';
+    case 'sent_confirmed':
+      return 'Người dùng xác nhận đã bấm Gửi';
+    default:
+      return 'Chưa rõ trạng thái gửi';
+  }
 }
 
 class PaymentReconciliationScreen extends StatefulWidget {
@@ -29,6 +48,8 @@ class _PaymentReconciliationScreenState
   );
 
   List<_PaymentRecord> _records = [];
+  final _searchController = TextEditingController();
+  String _channelFilter = 'all';
   StreamSubscription<dynamic>? _paymentEventsSubscription;
   bool _isLoading = true;
   String? _error;
@@ -36,17 +57,38 @@ class _PaymentReconciliationScreenState
   List<_PaymentRecord> get _trackableRecords => _records
       .where(
         (record) =>
+            record.channel == 'zalo' ||
             record.smsStatus == 'sent' ||
             record.smsStatus == 'simulated' ||
             record.smsStatus.isEmpty,
       )
       .toList();
 
+  List<_PaymentRecord> get _filteredRecords {
+    final query = _searchController.text.trim().toLowerCase();
+    return _trackableRecords.where((record) {
+      if (_channelFilter != 'all' && record.channel != _channelFilter) {
+        return false;
+      }
+      if (query.isEmpty) return true;
+      return <String>[
+        record.phone,
+        record.amount,
+        record.orderCode,
+        record.message,
+        record.replyMessage,
+      ].any((value) => value.toLowerCase().contains(query));
+    }).toList();
+  }
+
   List<_PaymentRecord> get _pending =>
-      _trackableRecords.where((record) => !record.isReceived).toList();
+      _filteredRecords.where((record) => !record.isReceived).toList();
 
   List<_PaymentRecord> get _received =>
-      _trackableRecords.where((record) => record.isReceived).toList();
+      _filteredRecords.where((record) => record.isReceived).toList();
+
+  List<_PaymentRecord> get _allReceived =>
+      _records.where((record) => record.isReceived).toList();
 
   @override
   void initState() {
@@ -61,6 +103,7 @@ class _PaymentReconciliationScreenState
   @override
   void dispose() {
     _paymentEventsSubscription?.cancel();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -81,7 +124,7 @@ class _PaymentReconciliationScreenState
               .whereType<Map<dynamic, dynamic>>()
               .map((record) => _PaymentRecord.fromMap(record))
               .toList()
-            ..sort((a, b) => b.sentAt.compareTo(a.sentAt));
+            ..sort((a, b) => b.sortTime.compareTo(a.sortTime));
 
       if (!mounted) return;
       setState(() {
@@ -177,7 +220,6 @@ class _PaymentReconciliationScreenState
         builder: (_) => _PaymentRecordDetailsScreen(
           record: record,
           channel: _channel,
-          sentAtText: _formatTime(record.sentAt),
           amountText: _formatAmount(
             record.amountValue,
             fallback: record.amount,
@@ -185,16 +227,31 @@ class _PaymentReconciliationScreenState
         ),
       ),
     );
+    await _loadRecords(showLoading: false);
+  }
+
+  Future<void> _openConversation(_PaymentRecord record) async {
+    try {
+      await _channel.invokeMethod<bool>(
+        record.channel == 'zalo' ? 'openZaloConversation' : 'openSmsConversation',
+        {'phone': record.phone},
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Không mở được hội thoại: $error')),
+      );
+    }
   }
 
   Future<void> _clearReceivedRecords() async {
-    if (_received.isEmpty) return;
+    if (_allReceived.isEmpty) return;
     final shouldClear = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Xóa các khoản đã nhận?'),
         content: Text(
-          'Sẽ xóa ${_received.length} khoản đã nhận và ảnh lưu kèm. '
+          'Sẽ xóa ${_allReceived.length} khoản đã nhận và ảnh lưu kèm. '
           'Các khoản đang chờ sẽ được giữ lại.',
         ),
         actions: [
@@ -244,7 +301,7 @@ class _PaymentReconciliationScreenState
       0,
       (total, record) => total + record.amountValue,
     );
-    const headerItemCount = 4;
+    const headerItemCount = 6;
     final pendingItemCount = pendingRecords.isEmpty ? 1 : pendingRecords.length;
     final receivedStartIndex = headerItemCount + pendingItemCount;
     final itemCount = receivedStartIndex + (receivedRecords.isEmpty ? 0 : 2);
@@ -254,7 +311,16 @@ class _PaymentReconciliationScreenState
         title: const Text('Đối soát chuyển khoản'),
         actions: [
           IconButton(
-            onPressed: _received.isEmpty ? null : _clearReceivedRecords,
+            onPressed: () => Navigator.of(context).push<bool>(
+              MaterialPageRoute<bool>(
+                builder: (_) => const PaymentAccountSettingsScreen(),
+              ),
+            ),
+            tooltip: 'Cấu hình tài khoản QR Zalo',
+            icon: const Icon(Icons.account_balance_outlined),
+          ),
+          IconButton(
+            onPressed: _allReceived.isEmpty ? null : _clearReceivedRecords,
             tooltip: 'Xóa tất cả khoản đã nhận',
             icon: const Icon(Icons.delete_sweep_outlined),
           ),
@@ -295,13 +361,66 @@ class _PaymentReconciliationScreenState
                   }
                   if (index == 1) return const SizedBox(height: 20);
                   if (index == 2) {
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: TextField(
+                        controller: _searchController,
+                        decoration: InputDecoration(
+                          prefixIcon: const Icon(Icons.search),
+                          hintText: 'Tìm SĐT, mã đơn, số tiền, nội dung',
+                          suffixIcon: _searchController.text.isEmpty
+                              ? null
+                              : IconButton(
+                                  onPressed: () => setState(
+                                    _searchController.clear,
+                                  ),
+                                  icon: const Icon(Icons.clear),
+                                ),
+                          border: const OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                        onChanged: (_) => setState(() {}),
+                      ),
+                    );
+                  }
+                  if (index == 3) {
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Wrap(
+                        spacing: 8,
+                        children: [
+                          ChoiceChip(
+                            label: const Text('Tất cả'),
+                            selected: _channelFilter == 'all',
+                            onSelected: (_) =>
+                                setState(() => _channelFilter = 'all'),
+                          ),
+                          ChoiceChip(
+                            avatar: const Icon(Icons.sms_outlined, size: 16),
+                            label: const Text('SMS'),
+                            selected: _channelFilter == 'sms',
+                            onSelected: (_) =>
+                                setState(() => _channelFilter = 'sms'),
+                          ),
+                          ChoiceChip(
+                            avatar: const Icon(Icons.chat_bubble_outline, size: 16),
+                            label: const Text('Zalo'),
+                            selected: _channelFilter == 'zalo',
+                            onSelected: (_) =>
+                                setState(() => _channelFilter = 'zalo'),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+                  if (index == 4) {
                     return _buildSectionTitle(
                       'Chờ khách chuyển (${pendingRecords.length})',
                       Icons.hourglass_top,
                       Colors.orange.shade800,
                     );
                   }
-                  if (index == 3) return const SizedBox(height: 8);
+                  if (index == 5) return const SizedBox(height: 8);
 
                   if (index < receivedStartIndex) {
                     if (pendingRecords.isEmpty) {
@@ -412,13 +531,15 @@ class _PaymentReconciliationScreenState
               cacheWidth: (52 * MediaQuery.of(context).devicePixelRatio)
                   .round(),
               fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => _recordIcon(received),
+            errorBuilder: (_, __, ___) => _recordIcon(received, record.channel),
             ),
           )
-        : _recordIcon(received);
+        : _recordIcon(received, record.channel);
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
-      color: record.smsStatus == 'simulated'
+      color: record.channel == 'zalo'
+          ? Colors.blue.shade50
+          : record.smsStatus == 'simulated'
           ? Colors.deepOrange.shade50
           : (record.customerReplied ? Colors.lightBlue.shade50 : null),
       child: ListTile(
@@ -444,9 +565,11 @@ class _PaymentReconciliationScreenState
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '${record.smsStatus == 'simulated' ? 'SMS ảo · ' : ''}'
-              '${_formatAmount(record.amountValue, fallback: record.amount)} · ${_formatTime(record.sentAt)}',
+              '${record.channel == 'zalo' ? 'Zalo · ' : (record.smsStatus == 'simulated' ? 'SMS ảo · ' : 'SMS · ')}'
+              '${_formatAmount(record.amountValue, fallback: record.amount)} · ${_formatTime(record.sortTime)}',
             ),
+            if (record.channel == 'zalo')
+              Text(_zaloStatusLabel(record.deliveryStatus)),
             const SizedBox(height: 2),
             Wrap(
               crossAxisAlignment: WrapCrossAlignment.center,
@@ -485,12 +608,30 @@ class _PaymentReconciliationScreenState
                       ),
                     ),
                   ),
-                Text('4 số cuối: ${lastFour.isEmpty ? '----' : lastFour}'),
+                InkWell(
+                  onTap: () => _openConversation(record),
+                  borderRadius: BorderRadius.circular(4),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 3),
+                    child: Text(
+                      '4 số cuối: ${lastFour.isEmpty ? '----' : lastFour} · ${record.channel == 'zalo' ? 'mở Zalo' : 'mở SMS'}',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                  ),
+                ),
               ],
             ),
             if (record.customerReplied)
               Text(
                 '✉ Khách đã phản hồi · ${_formatTime(record.replyReceivedAt)}',
+              ),
+            if (record.customerReplied && record.replyMessage.isNotEmpty)
+              Text(
+                'Khách: ${record.replyMessage}',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
               ),
           ],
         ),
@@ -512,11 +653,15 @@ class _PaymentReconciliationScreenState
     );
   }
 
-  Widget _recordIcon(bool received) {
+  Widget _recordIcon(bool received, String channel) {
     return CircleAvatar(
       backgroundColor: received ? Colors.green.shade50 : Colors.orange.shade50,
       child: Icon(
-        received ? Icons.check : Icons.sms_outlined,
+        received
+            ? Icons.check
+            : channel == 'zalo'
+            ? Icons.chat_bubble_outline
+            : Icons.sms_outlined,
         color: received ? Colors.green.shade700 : Colors.orange.shade800,
       ),
     );
@@ -539,12 +684,15 @@ class _PaymentReconciliationScreenState
 class _PaymentRecord {
   const _PaymentRecord({
     required this.id,
+    required this.channel,
     required this.phone,
     required this.amount,
     required this.amountValue,
     required this.sentAt,
     required this.isReceived,
     required this.smsStatus,
+    required this.deliveryStatus,
+    required this.createdAt,
     required this.message,
     required this.orderCode,
     required this.imagePath,
@@ -555,12 +703,15 @@ class _PaymentRecord {
   });
 
   final String id;
+  final String channel;
   final String phone;
   final String amount;
   final int amountValue;
   final int sentAt;
   final bool isReceived;
   final String smsStatus;
+  final String deliveryStatus;
+  final int createdAt;
   final String message;
   final String orderCode;
   final String imagePath;
@@ -569,17 +720,22 @@ class _PaymentRecord {
   final String replyMessage;
   final int replyReceivedAt;
 
+  int get sortTime => sentAt > 0 ? sentAt : createdAt;
+
   factory _PaymentRecord.fromMap(Map<dynamic, dynamic> map) {
     final amount = map['amount']?.toString() ?? '';
     final digits = amount.replaceAll(RegExp(r'[^0-9]'), '');
     return _PaymentRecord(
       id: map['id']?.toString() ?? '',
+      channel: map['channel']?.toString() ?? 'sms',
       phone: map['phone']?.toString() ?? 'Không rõ số điện thoại',
       amount: amount,
       amountValue: int.tryParse(digits) ?? 0,
       sentAt: (map['sentAt'] as num?)?.toInt() ?? 0,
       isReceived: map['status']?.toString() == 'received',
       smsStatus: map['smsStatus']?.toString() ?? '',
+      deliveryStatus: map['deliveryStatus']?.toString() ?? '',
+      createdAt: (map['createdAt'] as num?)?.toInt() ?? 0,
       message: map['message']?.toString() ?? '',
       orderCode: map['orderCode']?.toString() ?? '',
       imagePath: map['imagePath']?.toString() ?? '',
@@ -595,13 +751,11 @@ class _PaymentRecordDetailsScreen extends StatefulWidget {
   const _PaymentRecordDetailsScreen({
     required this.record,
     required this.channel,
-    required this.sentAtText,
     required this.amountText,
   });
 
   final _PaymentRecord record;
   final MethodChannel channel;
-  final String sentAtText;
   final String amountText;
 
   @override
@@ -612,16 +766,117 @@ class _PaymentRecordDetailsScreen extends StatefulWidget {
 class _PaymentRecordDetailsScreenState
     extends State<_PaymentRecordDetailsScreen> {
   bool _isSavingImage = false;
+  late _PaymentRecord _record;
 
-  Future<void> _openSmsConversation() async {
+  @override
+  void initState() {
+    super.initState();
+    _record = widget.record;
+  }
+
+  Future<void> _refreshRecord() async {
+    final records = await widget.channel.invokeListMethod<dynamic>(
+      'getPaymentTrackingRecords',
+    );
+    _PaymentRecord? match;
+    for (final item in records ?? const <dynamic>[]) {
+      if (item is Map<dynamic, dynamic>) {
+        final candidate = _PaymentRecord.fromMap(item);
+        if (candidate.id == _record.id) {
+          match = candidate;
+          break;
+        }
+      }
+    }
+    final refreshedRecord = match;
+    if (refreshedRecord != null && mounted) {
+      setState(() => _record = refreshedRecord);
+    }
+  }
+
+  Future<void> _openConversation() async {
     try {
-      await widget.channel.invokeMethod<bool>('openSmsConversation', {
-        'phone': widget.record.phone,
-      });
+      await widget.channel.invokeMethod<bool>(
+        widget.record.channel == 'zalo'
+            ? 'openZaloConversation'
+            : 'openSmsConversation',
+        {'phone': widget.record.phone},
+      );
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Không mở được hội thoại SMS: $error')),
+        SnackBar(content: Text('Không mở được hội thoại: $error')),
+      );
+    }
+  }
+
+  Future<void> _confirmZaloSent() async {
+    try {
+      final updated = await widget.channel.invokeMethod<bool>(
+        'setPaymentTrackingZaloStatus',
+        {'id': widget.record.id, 'deliveryStatus': 'sent_confirmed'},
+      );
+      if (updated == true && mounted) {
+        await _refreshRecord();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Đã ghi nhận người dùng xác nhận gửi Zalo.')),
+        );
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Không cập nhật được trạng thái: $error')),
+      );
+    }
+  }
+
+  Future<void> _recordZaloReply() async {
+    final controller = TextEditingController();
+    final message = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Ghi nhận phản hồi Zalo'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          minLines: 2,
+          maxLines: 5,
+          decoration: const InputDecoration(
+            hintText: 'Nhập nội dung khách đã nhắn',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Hủy'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(controller.text),
+            child: const Text('Lưu'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (message == null || message.trim().isEmpty) return;
+    try {
+      final updated = await widget.channel.invokeMethod<bool>(
+        'setPaymentTrackingZaloReply',
+        {'id': widget.record.id, 'message': message.trim()},
+      );
+      if (updated == true && mounted) {
+        await _refreshRecord();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Đã lưu nội dung phản hồi Zalo.')),
+        );
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Không lưu được phản hồi: $error')),
       );
     }
   }
@@ -651,7 +906,7 @@ class _PaymentRecordDetailsScreenState
 
   @override
   Widget build(BuildContext context) {
-    final record = widget.record;
+    final record = _record;
     final photoHeight = (MediaQuery.of(context).size.height * 0.5)
         .clamp(240.0, 480.0)
         .toDouble();
@@ -676,10 +931,14 @@ class _PaymentRecordDetailsScreenState
           Card(
             clipBehavior: Clip.antiAlias,
             child: record.imagePath.isEmpty
-                ? const SizedBox(
+                ? SizedBox(
                     height: 180,
                     child: Center(
-                      child: Text('Khoản này chưa có ảnh đơn hàng.'),
+                      child: Text(
+                        record.channel == 'zalo'
+                            ? 'Chưa quét ảnh đơn hàng cho khoản Zalo này.'
+                            : 'Khoản này chưa có ảnh đơn hàng.',
+                      ),
                     ),
                   )
                 : SizedBox(
@@ -716,6 +975,15 @@ class _PaymentRecordDetailsScreenState
                   subtitle: Text(record.phone),
                 ),
                 ListTile(
+                  leading: Icon(
+                    record.channel == 'zalo'
+                        ? Icons.chat_bubble_outline
+                        : Icons.sms_outlined,
+                  ),
+                  title: const Text('Kênh liên hệ'),
+                  subtitle: Text(record.channel == 'zalo' ? 'Zalo' : 'SMS'),
+                ),
+                ListTile(
                   leading: const Icon(Icons.payments_outlined),
                   title: const Text('Số tiền'),
                   subtitle: Text(widget.amountText),
@@ -727,6 +995,19 @@ class _PaymentRecordDetailsScreenState
                     subtitle: Text(
                       'Có trong mục Đã gửi của ứng dụng SMS; khách không nhận tin nhắn.',
                     ),
+                  ),
+                if (record.channel == 'zalo')
+                  ListTile(
+                    leading: const Icon(Icons.outbox_outlined),
+                    title: const Text('Trạng thái Zalo'),
+                    subtitle: Text(_zaloStatusLabel(record.deliveryStatus)),
+                    trailing: record.deliveryStatus == 'sent_confirmed'
+                        ? const Icon(Icons.check_circle, color: Colors.green)
+                        : IconButton(
+                            tooltip: 'Xác nhận đã bấm Gửi trong Zalo',
+                            onPressed: _confirmZaloSent,
+                            icon: const Icon(Icons.check_circle_outline),
+                          ),
                   ),
                 ListTile(
                   leading: Icon(
@@ -740,9 +1021,12 @@ class _PaymentRecordDetailsScreenState
                 ListTile(
                   leading: const Icon(Icons.schedule),
                   title: Text(
-                    record.smsStatus == 'simulated' ? 'Tạo lúc' : 'Gửi lúc',
+                    record.channel == 'zalo' &&
+                            record.deliveryStatus != 'sent_confirmed'
+                        ? 'Tạo lúc'
+                        : 'Gửi lúc',
                   ),
-                  subtitle: Text(widget.sentAtText),
+                  subtitle: Text(_formatPaymentTime(record.sortTime)),
                 ),
               ],
             ),
@@ -762,9 +1046,11 @@ class _PaymentRecordDetailsScreenState
                           color: Colors.blue.shade800,
                         ),
                         const SizedBox(width: 8),
-                        const Expanded(
+                          Expanded(
                           child: Text(
-                            'Khách đã phản hồi qua SMS',
+                            record.channel == 'zalo'
+                                ? 'Phản hồi Zalo đã ghi thủ công'
+                                : 'Khách đã phản hồi qua SMS',
                             style: TextStyle(fontWeight: FontWeight.w600),
                           ),
                         ),
@@ -787,7 +1073,9 @@ class _PaymentRecordDetailsScreenState
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Đây là dấu hiệu khách đã nhắn lại, chưa xác nhận đã chuyển tiền. SMS không có mã đơn nên nếu số này có nhiều đơn đang chờ, tất cả đơn cùng số sẽ được làm nổi bật.',
+                      record.channel == 'zalo'
+                          ? 'CallLog không đọc được tin nhắn Zalo tự động. Nội dung này do người dùng ghi nhận; chưa xác nhận khách đã chuyển tiền.'
+                          : 'Đây là dấu hiệu khách đã nhắn lại, chưa xác nhận đã chuyển tiền. SMS không có mã đơn nên nếu số này có nhiều đơn đang chờ, tất cả đơn cùng số sẽ được làm nổi bật.',
                       style: TextStyle(
                         color: Colors.blueGrey.shade700,
                         fontSize: 12,
@@ -800,7 +1088,7 @@ class _PaymentRecordDetailsScreenState
           Card(
             clipBehavior: Clip.antiAlias,
             child: InkWell(
-              onTap: _openSmsConversation,
+              onTap: _openConversation,
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(
@@ -808,9 +1096,11 @@ class _PaymentRecordDetailsScreenState
                   children: [
                     Row(
                       children: [
-                        const Expanded(
+                        Expanded(
                           child: Text(
-                            'Nội dung tin nhắn',
+                            record.channel == 'zalo'
+                                ? 'Nội dung chia sẻ qua Zalo'
+                                : 'Nội dung tin nhắn SMS',
                             style: TextStyle(fontWeight: FontWeight.w600),
                           ),
                         ),
@@ -831,6 +1121,8 @@ class _PaymentRecordDetailsScreenState
                     Text(
                       record.smsStatus == 'simulated'
                           ? 'Chạm để xem trong ứng dụng SMS · khách không nhận tin'
+                          : record.channel == 'zalo'
+                          ? 'Chạm để mở liên kết Zalo theo số điện thoại'
                           : 'Chạm để mở hội thoại SMS với khách',
                       style: TextStyle(
                         color: Theme.of(context).colorScheme.primary,
@@ -844,11 +1136,19 @@ class _PaymentRecordDetailsScreenState
           ),
         ],
       ),
-      bottomNavigationBar: record.imagePath.isEmpty
-          ? null
-          : SafeArea(
-              minimum: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-              child: FilledButton.icon(
+      bottomNavigationBar: SafeArea(
+        minimum: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (record.channel == 'zalo')
+              OutlinedButton.icon(
+                onPressed: _recordZaloReply,
+                icon: const Icon(Icons.edit_note_outlined),
+                label: const Text('Ghi nội dung khách phản hồi'),
+              ),
+            if (record.imagePath.isNotEmpty)
+              FilledButton.icon(
                 onPressed: _isSavingImage ? null : _saveImage,
                 icon: _isSavingImage
                     ? const SizedBox(
@@ -861,7 +1161,9 @@ class _PaymentRecordDetailsScreenState
                   _isSavingImage ? 'Đang lưu ảnh...' : 'Tải ảnh về thư viện',
                 ),
               ),
-            ),
+          ],
+        ),
+      ),
     );
   }
 }

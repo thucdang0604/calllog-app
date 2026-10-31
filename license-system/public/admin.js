@@ -26,6 +26,7 @@ import {
   let overview = { licenses: [], orders: [], transactions: [], counts: {} };
   let authUser = null;
   let googleSignInInProgress = false;
+  let overviewLoadPromise = null;
 
   function message(target, text, kind = '') {
     const element = $(target);
@@ -139,21 +140,30 @@ import {
     $('transactionRows').innerHTML = rows || '<tr><td colspan="5" class="empty">Chưa có giao dịch.</td></tr>';
   }
 
-  async function loadOverview() {
+  function loadOverview() {
+    if (overviewLoadPromise) return overviewLoadPromise;
+    const refreshButton = $('refreshButton');
+    refreshButton.disabled = true;
     message('pageMessage', 'Đang tải dữ liệu…');
-    try {
-      const result = await api('/admin/overview');
-      overview = result;
-      $('adminIdentity').textContent = result.adminEmail || '';
-      renderCounts(result.counts || {});
-      renderLicenses();
-      renderOrders();
-      renderTransactions();
-      message('pageMessage', `Đã tải ${overview.licenses.length} license, ${overview.orders.length} đơn và ${overview.transactions.length} giao dịch.`, 'success');
-    } catch (error) {
-      message('pageMessage', error.message, 'error');
-      if (!authUser) setSignedIn(false);
-    }
+    overviewLoadPromise = (async () => {
+      try {
+        const result = await api('/admin/overview');
+        overview = result;
+        $('adminIdentity').textContent = result.adminEmail || '';
+        renderCounts(result.counts || {});
+        renderLicenses();
+        renderOrders();
+        renderTransactions();
+        message('pageMessage', `Đã tải ${overview.licenses.length} license, ${overview.orders.length} đơn và ${overview.transactions.length} giao dịch.`, 'success');
+      } catch (error) {
+        message('pageMessage', error.message, 'error');
+        if (!authUser) setSignedIn(false);
+      } finally {
+        refreshButton.disabled = false;
+        overviewLoadPromise = null;
+      }
+    })();
+    return overviewLoadPromise;
   }
 
   async function applyAction(deviceId, action, plan) {

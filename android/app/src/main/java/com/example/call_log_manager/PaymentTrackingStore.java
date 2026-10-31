@@ -32,12 +32,14 @@ final class PaymentTrackingStore {
         JSONObject record = new JSONObject();
         try {
             record.put("id", id);
+            record.put("channel", "sms");
             record.put("phone", phone);
             record.put("amount", amount);
             record.put("message", message);
             record.put("createdAt", System.currentTimeMillis());
             record.put("sentAt", 0L);
             record.put("smsStatus", "sending");
+            record.put("deliveryStatus", "sending");
             record.put("status", "pending");
             record.put("receivedAt", JSONObject.NULL);
             record.put("orderCode", "");
@@ -55,10 +57,105 @@ final class PaymentTrackingStore {
         return id;
     }
 
+    static synchronized String createZaloSession(
+        Context context,
+        String phone,
+        String amount,
+        String message
+    ) {
+        String id = UUID.randomUUID().toString();
+        JSONArray records = getRecords(context);
+        JSONObject record = new JSONObject();
+        try {
+            record.put("id", id);
+            record.put("channel", "zalo");
+            record.put("phone", phone == null ? "" : phone);
+            record.put("amount", amount == null ? "" : amount);
+            record.put("message", message == null ? "" : message);
+            record.put("createdAt", System.currentTimeMillis());
+            // Preparing a chat draft does not prove the user pasted or sent it.
+            record.put("sentAt", 0L);
+            record.put("smsStatus", "not_applicable");
+            record.put("deliveryStatus", "awaiting_scan");
+            record.put("status", "pending");
+            record.put("receivedAt", JSONObject.NULL);
+            record.put("orderCode", "");
+            record.put("imagePath", "");
+            record.put("qrImagePath", "");
+            record.put("capturedAt", 0L);
+            record.put("customerReplied", false);
+            record.put("replyMessage", "");
+            records.put(record);
+        } catch (JSONException ignored) {
+            return "";
+        }
+
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_RECORDS, records.toString())
+            .apply();
+        return id;
+    }
+
+    static synchronized boolean setZaloDeliveryStatus(Context context, String id, String status) {
+        if (id == null || id.isEmpty()
+            || (!"sent_confirmed".equals(status)
+                && !"draft_ready".equals(status)
+                && !"chat_opened".equals(status))) return false;
+        JSONObject existing = findRecord(context, id);
+        if (existing == null || !"zalo".equals(existing.optString("channel", ""))) return false;
+        return updateRecord(context, id, record -> {
+            try {
+                if (!"zalo".equals(record.optString("channel", ""))) return;
+                record.put("deliveryStatus", status);
+                if ("sent_confirmed".equals(status)) record.put("sentAt", System.currentTimeMillis());
+                if ("draft_ready".equals(status)) record.put("qrCopiedAt", System.currentTimeMillis());
+                if ("chat_opened".equals(status)) record.put("chatOpenedAt", System.currentTimeMillis());
+            } catch (JSONException ignored) {
+                // Leave the stored values unchanged if an update fails.
+            }
+        });
+    }
+
+    static synchronized boolean setZaloQrImagePath(Context context, String id, String imagePath) {
+        if (id == null || id.isEmpty() || imagePath == null || imagePath.trim().isEmpty()) return false;
+        JSONObject existing = findRecord(context, id);
+        if (existing == null || !"zalo".equals(existing.optString("channel", ""))) return false;
+        return updateRecord(context, id, record -> {
+            try {
+                if ("zalo".equals(record.optString("channel", ""))) {
+                    record.put("qrImagePath", imagePath);
+                }
+            } catch (JSONException ignored) {
+                // Leave the stored values unchanged if an update fails.
+            }
+        });
+    }
+
+    static synchronized boolean setZaloReply(Context context, String id, String message) {
+        if (id == null || id.isEmpty() || message == null || message.trim().isEmpty()) return false;
+        JSONObject existing = findRecord(context, id);
+        if (existing == null || !"zalo".equals(existing.optString("channel", ""))) return false;
+        return updateRecord(context, id, record -> {
+            if (!"zalo".equals(record.optString("channel", ""))) return;
+            try {
+                long now = System.currentTimeMillis();
+                record.put("customerReplied", true);
+                record.put("replyPhone", record.optString("phone", ""));
+                record.put("replyMessage", message.trim());
+                record.put("replyReceivedAt", now);
+                record.put("zaloReplyManuallyRecorded", true);
+            } catch (JSONException ignored) {
+                // Leave the stored values unchanged if an update fails.
+            }
+        });
+    }
+
     static synchronized void setSmsStatus(Context context, String id, boolean sent) {
         updateRecord(context, id, record -> {
             try {
                 record.put("smsStatus", sent ? "sent" : "failed");
+                record.put("deliveryStatus", sent ? "sent" : "failed");
                 if (sent) record.put("sentAt", System.currentTimeMillis());
             } catch (JSONException ignored) {
                 // Leave the stored values unchanged if an update fails.
@@ -70,6 +167,7 @@ final class PaymentTrackingStore {
         return updateRecord(context, id, record -> {
             try {
                 record.put("smsStatus", "simulated");
+                record.put("deliveryStatus", "simulated");
                 record.put("sentAt", System.currentTimeMillis());
             } catch (JSONException ignored) {
                 // Leave the stored values unchanged if an update fails.
@@ -93,6 +191,7 @@ final class PaymentTrackingStore {
             JSONObject record = records.optJSONObject(index);
             if (record == null
                 || !"pending".equals(record.optString("status", "pending"))
+                || !"sms".equals(record.optString("channel", "sms"))
                 || record.optLong("sentAt", 0L) > receivedAt
                 || !("sent".equals(record.optString("smsStatus", ""))
                     || record.optString("smsStatus", "").isEmpty())
@@ -167,6 +266,8 @@ final class PaymentTrackingStore {
             if ("received".equals(record.optString("status"))) {
                 String imagePath = record.optString("imagePath", "");
                 if (!imagePath.isEmpty()) imagesToDelete.add(imagePath);
+                String qrImagePath = record.optString("qrImagePath", "");
+                if (!qrImagePath.isEmpty()) imagesToDelete.add(qrImagePath);
                 removed++;
             } else {
                 remainingRecords.put(record);
@@ -196,6 +297,7 @@ final class PaymentTrackingStore {
         JSONArray records = getRecords(context);
         JSONArray remainingRecords = new JSONArray();
         String imagePath = "";
+        String qrImagePath = "";
         boolean found = false;
 
         for (int index = 0; index < records.length(); index++) {
@@ -203,6 +305,7 @@ final class PaymentTrackingStore {
             if (record == null) continue;
             if (id.equals(record.optString("id"))) {
                 imagePath = record.optString("imagePath", "");
+                qrImagePath = record.optString("qrImagePath", "");
                 found = true;
             } else {
                 remainingRecords.put(record);
@@ -220,6 +323,13 @@ final class PaymentTrackingStore {
                 new File(imagePath).delete();
             } catch (Exception ignored) {
                 // The record is removed even if its private image is already missing.
+            }
+        }
+        if (!qrImagePath.isEmpty()) {
+            try {
+                new File(qrImagePath).delete();
+            } catch (Exception ignored) {
+                // The record is removed even if a stale QR card is already missing.
             }
         }
         return true;

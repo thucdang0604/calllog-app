@@ -143,8 +143,20 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
             case "getPaymentTrackingRecords":
                 getPaymentTrackingRecords(result);
                 break;
+            case "getPaymentAccountSettings":
+                result.success(PaymentQrShareManager.getSettings(context));
+                break;
+            case "savePaymentAccountSettings":
+                savePaymentAccountSettings(call, result);
+                break;
             case "setPaymentTrackingReceived":
                 setPaymentTrackingReceived(call, result);
+                break;
+            case "setPaymentTrackingZaloStatus":
+                setPaymentTrackingZaloStatus(call, result);
+                break;
+            case "setPaymentTrackingZaloReply":
+                setPaymentTrackingZaloReply(call, result);
                 break;
             case "deletePaymentTrackingRecord":
                 deletePaymentTrackingRecord(call, result);
@@ -157,6 +169,9 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
                 break;
             case "openSmsConversation":
                 openSmsConversation(call, result);
+                break;
+            case "openZaloConversation":
+                openZaloConversation(call, result);
                 break;
             case "isCallLogDefaultSmsApp":
                 result.success(isCallLogDefaultSmsApp());
@@ -490,12 +505,15 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
             Map<String, Object> item = new HashMap<>();
             item.put("id", record.optString("id", ""));
             item.put("phone", record.optString("phone", ""));
+            item.put("channel", record.optString("channel", "sms"));
             item.put("amount", record.optString("amount", ""));
             item.put("message", record.optString("message", ""));
+            item.put("createdAt", record.optLong("createdAt", 0L));
             item.put("sentAt", record.optLong("sentAt", 0L));
             item.put("status", record.optString("status", "pending"));
             item.put("receivedAt", record.isNull("receivedAt") ? null : record.optLong("receivedAt", 0L));
             item.put("smsStatus", record.optString("smsStatus", ""));
+            item.put("deliveryStatus", record.optString("deliveryStatus", ""));
             item.put("orderCode", record.optString("orderCode", ""));
             item.put("imagePath", record.optString("imagePath", ""));
             item.put("capturedAt", record.optLong("capturedAt", 0L));
@@ -506,6 +524,48 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
             output.add(item);
         }
         result.success(output);
+    }
+
+    private void savePaymentAccountSettings(MethodCall call, Result result) {
+        String bankName = call.argument("bankName");
+        String bankBin = call.argument("bankBin");
+        String bankId = call.argument("bankId");
+        String accountNumber = call.argument("accountNumber");
+        String accountName = call.argument("accountName");
+        Boolean verified = call.argument("verified");
+        boolean saved = PaymentQrShareManager.saveSettings(
+            context,
+            bankName,
+            bankBin,
+            bankId,
+            accountNumber,
+            accountName,
+            Boolean.TRUE.equals(verified)
+        );
+        if (saved) result.success(true);
+        else result.error("INVALID_PAYMENT_ACCOUNT", "Thông tin ngân hàng hoặc tài khoản chưa hợp lệ", null);
+    }
+
+    private void setPaymentTrackingZaloStatus(MethodCall call, Result result) {
+        String id = call.argument("id");
+        String status = call.argument("deliveryStatus");
+        boolean updated = PaymentTrackingStore.setZaloDeliveryStatus(context, id, status);
+        if (updated) {
+            PaymentTrackingEventBus.notifyRecordsChanged();
+            FloatingWindowService.refreshPaymentQueueIfVisible();
+        }
+        result.success(updated);
+    }
+
+    private void setPaymentTrackingZaloReply(MethodCall call, Result result) {
+        String id = call.argument("id");
+        String message = call.argument("message");
+        boolean updated = PaymentTrackingStore.setZaloReply(context, id, message);
+        if (updated) {
+            PaymentTrackingEventBus.notifyRecordsChanged();
+            FloatingWindowService.refreshPaymentQueueIfVisible();
+        }
+        result.success(updated);
     }
 
     private void setPaymentTrackingReceived(MethodCall call, Result result) {
@@ -550,6 +610,33 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
             result.success(true);
         } catch (Exception e) {
             result.error("OPEN_SMS_ERROR", "Không mở được hội thoại SMS trên thiết bị", e.getMessage());
+        }
+    }
+
+    private void openZaloConversation(MethodCall call, Result result) {
+        String phone = call.argument("phone");
+        if (phone == null || phone.trim().isEmpty()) {
+            result.error("INVALID_ARGUMENT", "Thiếu số điện thoại khách hàng", null);
+            return;
+        }
+        String cleanPhone = phone.replaceAll("[^0-9]", "");
+        if (cleanPhone.startsWith("84") && cleanPhone.length() >= 11) {
+            cleanPhone = "0" + cleanPhone.substring(2);
+        }
+        if (cleanPhone.isEmpty()) {
+            result.error("INVALID_ARGUMENT", "Số điện thoại không hợp lệ", null);
+            return;
+        }
+        try {
+            Intent intent = new Intent(
+                Intent.ACTION_VIEW,
+                Uri.parse("https://zalo.me/" + Uri.encode(cleanPhone))
+            );
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            context.startActivity(intent);
+            result.success(true);
+        } catch (Exception error) {
+            result.error("OPEN_ZALO_ERROR", "Không mở được liên kết Zalo theo số điện thoại", error.getMessage());
         }
     }
 
@@ -696,7 +783,8 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
     }
 
     private void getDeviceId(Result result) {
-        result.success(LicenseManager.getDeviceId(context));
+        String deviceId = LicenseManager.getDeviceId(context);
+        result.success(deviceId);
     }
 
     private void shareText(MethodCall call, Result result) {

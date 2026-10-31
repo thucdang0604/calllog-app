@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../providers/call_log_provider.dart';
 import '../services/app_update_service.dart';
 import '../services/license_api_service.dart';
@@ -10,6 +11,7 @@ import '../widgets/floating_window_widget.dart';
 import '../widgets/fake_gps_widget.dart';
 import '../widgets/timemark_camera_widget.dart';
 import 'payment_reconciliation_screen.dart';
+import 'payment_account_settings_screen.dart';
 
 class SimpleHomeScreen extends StatefulWidget {
   const SimpleHomeScreen({super.key});
@@ -234,20 +236,43 @@ class _SimpleHomeScreenState extends State<SimpleHomeScreen>
             physics: const AlwaysScrollableScrollPhysics(),
             child: Column(
               children: [
-                // Floating Window Control
-                const FloatingWindowWidget(),
-
-                // Vị trí giả lập (Fake GPS)
-                const FakeGpsWidget(),
-
-                // TimeMark: camera hệ thống chỉ mở khi người dùng bấm chụp.
-                const TimeMarkCameraWidget(),
-
-                // Cấu hình Tin nhắn SMS mẫu
-                const _SmsTemplateConfigWidget(),
-
-                // 2 cuộc gọi gần nhất (preview)
-                _buildLatestCallsPreview(provider),
+                ExpansionTile(
+                  initiallyExpanded: true,
+                  leading: const Icon(Icons.local_shipping_outlined),
+                  title: const Text('Giao hàng & chuyển khoản'),
+                  subtitle: const Text('Popup nhanh, cuộc gọi và đối soát'),
+                  children: [
+                    const FloatingWindowWidget(),
+                    _buildLatestCallsPreview(provider),
+                  ],
+                ),
+                ExpansionTile(
+                  leading: const Icon(Icons.widgets_outlined),
+                  title: const Text('Tiện ích'),
+                  subtitle: const Text('Vị trí giả lập và TimeMark'),
+                  children: const [FakeGpsWidget(), TimeMarkCameraWidget()],
+                ),
+                ExpansionTile(
+                  leading: const Icon(Icons.tune_outlined),
+                  title: const Text('Cài đặt nhắn tin & QR'),
+                  subtitle: const Text('Mẫu SMS và tài khoản nhận Zalo'),
+                  children: [
+                    const _SmsTemplateConfigWidget(),
+                    ListTile(
+                      leading: const Icon(Icons.account_balance_outlined),
+                      title: const Text('Tài khoản QR Zalo'),
+                      subtitle: const Text(
+                        'Thiết lập và quét xác nhận QR tĩnh',
+                      ),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => Navigator.of(context).push<bool>(
+                        MaterialPageRoute<bool>(
+                          builder: (_) => const PaymentAccountSettingsScreen(),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ),
           );
@@ -425,6 +450,9 @@ class _SmsTemplateConfigWidget extends StatefulWidget {
 
 class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
     with WidgetsBindingObserver {
+  static const _regularLicenseSyncInterval = Duration(hours: 12);
+  static const _pendingLicenseSyncInterval = Duration(minutes: 5);
+  static const _pendingLicenseSyncWindow = Duration(days: 3);
   final TextEditingController _controller = TextEditingController();
   final LicenseApiService _licenseApi = LicenseApiService();
   bool _hasSmsPermission = false;
@@ -433,6 +461,33 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
   Map<String, dynamic>? _licenseDetails;
   bool _isLoading = true;
   bool _isSyncingLicense = false;
+  int _lastLicenseSyncAttemptAt = 0;
+
+  String _lastSyncKey(String deviceId) => 'sms_license_last_sync_$deviceId';
+  String _pendingOrderKey(String deviceId) => 'sms_license_pending_order_$deviceId';
+
+  Future<void> _markPendingOrder(String deviceId) async {
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setInt(_pendingOrderKey(deviceId), DateTime.now().millisecondsSinceEpoch);
+    } catch (_) {
+      // The order remains available on the server if local storage is unavailable.
+    }
+  }
+
+  Future<void> _clearPendingOrder(String deviceId) async {
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.remove(_pendingOrderKey(deviceId));
+    } catch (_) {}
+  }
+
+  Future<void> _recordLicenseSync(String deviceId) async {
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setInt(_lastSyncKey(deviceId), DateTime.now().millisecondsSinceEpoch);
+    } catch (_) {}
+  }
 
   @override
   void initState() {
@@ -493,13 +548,36 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
     }
   }
 
-  Future<void> _syncLicenseFromServer() async {
+  Future<void> _syncLicenseFromServer({bool force = false}) async {
     if (!_licenseApi.isConfigured || _isSyncingLicense) return;
     _isSyncingLicense = true;
     try {
       const channel = MethodChannel('call_log_manager');
       final deviceId = await channel.invokeMethod<String>('getDeviceId');
       if (deviceId == null || deviceId.isEmpty) return;
+      SharedPreferences? preferences;
+      try {
+        preferences = await SharedPreferences.getInstance();
+      } catch (_) {
+        // A storage failure must not prevent an online license check.
+      }
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final pendingAt = preferences?.getInt(_pendingOrderKey(deviceId)) ?? 0;
+      final lastSyncAt = preferences?.getInt(_lastSyncKey(deviceId)) ?? 0;
+      final hasRecentOrder = pendingAt > 0 && now >= pendingAt &&
+          now - pendingAt < _pendingLicenseSyncWindow.inMilliseconds;
+      final interval = hasRecentOrder
+          ? _pendingLicenseSyncInterval
+          : _regularLicenseSyncInterval;
+      if (!force && lastSyncAt > 0 && now >= lastSyncAt &&
+          now - lastSyncAt < interval.inMilliseconds) {
+        return;
+      }
+      if (!force && now >= _lastLicenseSyncAttemptAt &&
+          now - _lastLicenseSyncAttemptAt < const Duration(minutes: 1).inMilliseconds) {
+        return;
+      }
+      _lastLicenseSyncAttemptAt = now;
       final response = await _licenseApi.syncLicense(deviceId);
       final token = response['licenseToken']?.toString();
       if (token == null || token.isEmpty) return;
@@ -508,6 +586,11 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
         {'token': token},
       );
       if (applied == true && mounted) {
+        await _recordLicenseSync(deviceId);
+        if (response['license'] is Map &&
+            (response['license'] as Map)['status'] == 'active') {
+          await _clearPendingOrder(deviceId);
+        }
         final details = await _readLicenseDetails(channel);
         if (mounted && details != null) {
           setState(() => _licenseDetails = details);
@@ -635,22 +718,60 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
     }
   }
 
-  void _showLicenseModal() {
+  Future<void> _showLicenseModal() async {
     final keyCtrl = TextEditingController();
+    await _syncLicenseFromServer(force: true);
+    const deviceIdChannel = MethodChannel('call_log_manager');
+    String deviceId = '';
+    try {
+      deviceId =
+          (await deviceIdChannel.invokeMethod<String>('getDeviceId') ?? '')
+              .trim()
+              .toUpperCase();
+    } catch (_) {
+      deviceId = '';
+    }
+    Map<String, dynamic>? licenseInfo = _licenseDetails;
+    final deviceIdPattern = RegExp(
+      r'^SMS-(?:[A-F0-9]{4}-[A-F0-9]{4}|[A-F0-9]{8}-[A-F0-9]{8})$',
+    );
+    if (!deviceIdPattern.hasMatch(deviceId)) {
+      final cachedDeviceId = (licenseInfo?['deviceId']?.toString() ?? '')
+          .trim()
+          .toUpperCase();
+      if (deviceIdPattern.hasMatch(cachedDeviceId)) {
+        deviceId = cachedDeviceId;
+      } else {
+        licenseInfo = await _readLicenseDetails(deviceIdChannel);
+        deviceId = (licenseInfo?['deviceId']?.toString() ?? '')
+            .trim()
+            .toUpperCase();
+      }
+    }
+    if (!mounted) return;
+    if (!deviceIdPattern.hasMatch(deviceId)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Không đọc được mã thiết bị hợp lệ.')),
+      );
+      return;
+    }
+    if (licenseInfo != _licenseDetails && licenseInfo != null) {
+      setState(() => _licenseDetails = licenseInfo);
+    }
     const plans = [
       {'id': '30D', 'title': '30 ngày', 'price': '50.000đ'},
       {'id': '90D', 'title': '90 ngày', 'price': '140.000đ'},
       {'id': '1Y', 'title': '1 năm', 'price': '365.000đ'},
       {'id': 'PERM', 'title': 'Vĩnh viễn', 'price': '999.999đ'},
     ];
-    final deviceId =
-        _licenseDetails?['deviceId']?.toString() ?? 'SMS-XXXX-XXXX';
     final isLicensed = _licenseDetails?['isLicensed'] == true;
     final remainingTrial = _licenseDetails?['remainingTrial'] as int? ?? 0;
     Map<String, dynamic>? order;
     Timer? paymentTimer;
     var creatingOrder = false;
     var checkingPayment = false;
+    var automaticPaymentCheckStopped = false;
+    var automaticPaymentCheckCount = 0;
     var sheetIsOpen = true;
     String? paymentMessage;
 
@@ -681,6 +802,8 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
               'Không xác minh được license trên thiết bị này.',
             );
           }
+          await _recordLicenseSync(deviceId);
+          await _clearPendingOrder(deviceId);
           paymentTimer?.cancel();
           await _loadConfig();
           if (sheetIsOpen && mounted) {
@@ -693,9 +816,14 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
             Navigator.of(context).pop();
           }
         } else if (state == 'expired') {
+          await _clearPendingOrder(deviceId);
           paymentTimer?.cancel();
+          automaticPaymentCheckStopped = true;
           if (sheetIsOpen) {
-            update(() => paymentMessage = 'Đơn đã hết hạn. Hãy tạo đơn mới.');
+            update(() {
+              order = null;
+              paymentMessage = 'Đơn đã hết hạn. Hãy tạo đơn mới.';
+            });
           }
         } else if (state == 'pending' && sheetIsOpen) {
           update(
@@ -711,7 +839,7 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
     }
 
     Future<void> createOrder(String planId, StateSetter update) async {
-      if (creatingOrder) return;
+      if (creatingOrder || order?['plan'] == planId) return;
       update(() {
         creatingOrder = true;
         paymentMessage = null;
@@ -721,17 +849,33 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
           deviceId: deviceId,
           plan: planId,
         );
+        await _markPendingOrder(deviceId);
         if (!sheetIsOpen) return;
         update(() {
           order = created;
+          automaticPaymentCheckStopped = false;
+          automaticPaymentCheckCount = 0;
           paymentMessage =
               'Chuyển khoản xong, gửi mã máy qua Telegram để quản lý đối soát.';
         });
         paymentTimer?.cancel();
-        paymentTimer = Timer.periodic(
-          const Duration(seconds: 30),
-          (_) => unawaited(checkPayment(update)),
-        );
+        paymentTimer = Timer.periodic(const Duration(minutes: 5), (_) {
+          if (!sheetIsOpen) {
+            paymentTimer?.cancel();
+            return;
+          }
+          if (automaticPaymentCheckCount >= 2) {
+            paymentTimer?.cancel();
+            automaticPaymentCheckStopped = true;
+            update(() {
+              paymentMessage =
+                  'Đã dừng tự kiểm tra sau 15 phút để tiết kiệm chi phí. Bạn vẫn có thể kiểm tra thủ công hoặc nhận mã qua Telegram.';
+            });
+            return;
+          }
+          automaticPaymentCheckCount += 1;
+          unawaited(checkPayment(update));
+        });
         unawaited(checkPayment(update));
       } catch (error) {
         if (sheetIsOpen) update(() => paymentMessage = error.toString());
@@ -808,7 +952,7 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
                       SizedBox(
                         width: double.infinity,
                         child: OutlinedButton(
-                          onPressed: creatingOrder
+                          onPressed: creatingOrder || order?['plan'] == plan['id']
                               ? null
                               : () => createOrder(plan['id']!, update),
                           child: Row(
@@ -914,11 +1058,14 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
                       ),
                       Row(
                         children: [
-                          const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
+                          if (automaticPaymentCheckStopped)
+                            const Icon(Icons.info_outline, size: 18)
+                          else
+                            const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
@@ -973,6 +1120,7 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
                                     {'key': key},
                                   );
                             if (ok == true && ctx.mounted) {
+                              await _clearPendingOrder(deviceId);
                               await _loadConfig();
                               if (ctx.mounted) Navigator.pop(ctx);
                             } else if (mounted && ctx.mounted) {

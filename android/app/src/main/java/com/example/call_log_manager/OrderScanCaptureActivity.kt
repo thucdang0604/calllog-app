@@ -1,6 +1,7 @@
 package com.example.call_log_manager
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -8,6 +9,7 @@ import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -23,6 +25,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -50,6 +53,8 @@ class OrderScanCaptureActivity : AppCompatActivity() {
         const val EXTRA_SESSION_ID = "payment_session_id"
         const val EXTRA_PHONE = "payment_phone"
         const val EXTRA_MESSAGE = "payment_message"
+        const val EXTRA_QR_IMAGE_PATH = "payment_qr_image_path"
+        const val EXTRA_RETURN_TO_CHAT = "payment_return_to_chat"
 
         private const val TAG = "OrderScanCapture"
         private const val CAMERA_PERMISSION_REQUEST = 2401
@@ -65,6 +70,7 @@ class OrderScanCaptureActivity : AppCompatActivity() {
     private val statusHandler = Handler(Looper.getMainLooper())
     private val isAnalyzing = AtomicBoolean(false)
     private val captureStarted = AtomicBoolean(false)
+    private val zaloFlowFinished = AtomicBoolean(false)
 
     private val barcodeScannerDelegate = lazy {
         val options = BarcodeScannerOptions.Builder()
@@ -124,6 +130,12 @@ class OrderScanCaptureActivity : AppCompatActivity() {
             Toast.makeText(this, "Thiếu thông tin phiên tin nhắn", Toast.LENGTH_LONG).show()
             finish()
             return
+        }
+
+        if (intent.getBooleanExtra(EXTRA_RETURN_TO_CHAT, false)) {
+            onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() = finishZaloFlow(null)
+            })
         }
 
         buildScreen()
@@ -193,8 +205,14 @@ class OrderScanCaptureActivity : AppCompatActivity() {
         )
 
         val closeButton = Button(this).apply {
-            text = "Đóng"
-            setOnClickListener { finish() }
+            text = if (intent.getBooleanExtra(EXTRA_RETURN_TO_CHAT, false)) "Bỏ qua" else "Đóng"
+            setOnClickListener {
+                if (intent.getBooleanExtra(EXTRA_RETURN_TO_CHAT, false)) {
+                    finishZaloFlow(null)
+                } else {
+                    finish()
+                }
+            }
         }
         previewFrame.addView(
             closeButton,
@@ -427,11 +445,18 @@ class OrderScanCaptureActivity : AppCompatActivity() {
                                 savedFile.absolutePath,
                                 capturedAt
                             )
+                            PaymentTrackingEventBus.notifyRecordsChanged()
+                            FloatingWindowService.refreshPaymentQueueIfVisible()
                             if (previousPath.isNotBlank() && previousPath != savedFile.absolutePath) {
                                 File(previousPath).delete()
                             }
                             runOnUiThread {
-                                if (!isFinishing && !isDestroyed) showCapturedResult(savedFile, orderCode)
+                                if (isFinishing || isDestroyed) return@runOnUiThread
+                                if (intent.getBooleanExtra(EXTRA_RETURN_TO_CHAT, false)) {
+                                    finishZaloFlow(orderCode)
+                                } else {
+                                    showCapturedResult(savedFile, orderCode)
+                                }
                             }
                         }
                     } catch (error: RejectedExecutionException) {
@@ -442,7 +467,15 @@ class OrderScanCaptureActivity : AppCompatActivity() {
                             rawFile.absolutePath,
                             capturedAt
                         )
-                        if (!isFinishing && !isDestroyed) showCapturedResult(rawFile, orderCode)
+                        PaymentTrackingEventBus.notifyRecordsChanged()
+                        FloatingWindowService.refreshPaymentQueueIfVisible()
+                        if (!isFinishing && !isDestroyed) {
+                            if (intent.getBooleanExtra(EXTRA_RETURN_TO_CHAT, false)) {
+                                finishZaloFlow(orderCode)
+                            } else {
+                                showCapturedResult(rawFile, orderCode)
+                            }
+                        }
                     }
                 }
             }
@@ -569,6 +602,62 @@ class OrderScanCaptureActivity : AppCompatActivity() {
         smsMessageView.text = smsMessage.ifBlank { "(Không có nội dung)" }
     }
 
+    private fun finishZaloFlow(orderCode: String?) {
+        if (!zaloFlowFinished.compareAndSet(false, true)) return
+        val qrImagePath = intent.getStringExtra(EXTRA_QR_IMAGE_PATH).orEmpty()
+        val hasQrImage = qrImagePath.isNotBlank()
+        var qrCopied = false
+        try {
+            if (qrImagePath.isNotBlank()) {
+                PaymentQrShareManager.copyTransferCardToZaloClipboard(this, qrImagePath)
+                PaymentTrackingStore.setZaloDeliveryStatus(this, sessionId, "draft_ready")
+                PaymentTrackingEventBus.notifyRecordsChanged()
+                FloatingWindowService.refreshPaymentQueueIfVisible()
+                qrCopied = true
+            }
+        } catch (error: Exception) {
+            Log.e(TAG, "Không sao chép được ảnh chuyển khoản vào clipboard", error)
+        }
+
+        val scanResult = orderCode?.takeIf { it.isNotBlank() }
+            ?.let { "Đã quét đơn $it." }
+            ?: "Đã bỏ qua quét đơn."
+        val message = when {
+            qrCopied -> "$scanResult QR kèm số tiền đã sao chép; dán ảnh trong chat Zalo rồi bấm Gửi."
+            hasQrImage -> "$scanResult Không sao chép được ảnh QR; đang mở Zalo theo số khách."
+            else -> "$scanResult Đang mở Zalo theo số khách; chưa có QR đã xác nhận để sao chép."
+        }
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        try {
+            openZaloChatByPhone()
+            if (!qrCopied) {
+                PaymentTrackingStore.setZaloDeliveryStatus(this, sessionId, "chat_opened")
+                PaymentTrackingEventBus.notifyRecordsChanged()
+                FloatingWindowService.refreshPaymentQueueIfVisible()
+            }
+        } catch (error: Exception) {
+            Log.e(TAG, "Không mở được chat Zalo theo số khách sau khi quét", error)
+            Toast.makeText(this, "Đã lưu đơn nhưng không mở được Zalo theo số khách.", Toast.LENGTH_LONG).show()
+        }
+        finish()
+    }
+
+    private fun openZaloChatByPhone() {
+        var phoneDigits = phone.filter { it.isDigit() }
+        if (phoneDigits.startsWith("84") && phoneDigits.length >= 11) {
+            phoneDigits = "0" + phoneDigits.substring(2)
+        }
+        if (phoneDigits.isEmpty()) throw IllegalArgumentException("Số điện thoại khách không hợp lệ.")
+
+        val zaloIntent = Intent(
+            Intent.ACTION_VIEW,
+            Uri.parse("https://zalo.me/${Uri.encode(phoneDigits)}")
+        ).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        startActivity(zaloIntent)
+    }
+
     private fun resumeScanning() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         captureStarted.set(false)
@@ -620,7 +709,17 @@ class OrderScanCaptureActivity : AppCompatActivity() {
     }
 
     private fun readSmsStatus(): Pair<String, String> {
-        val status = PaymentTrackingStore.findRecord(this, sessionId)?.optString("smsStatus")
+        val record = PaymentTrackingStore.findRecord(this, sessionId)
+        if (record?.optString("channel") == "zalo") {
+            val deliveryStatus = record.optString("deliveryStatus")
+            val message = if (deliveryStatus == "sent_confirmed") {
+                "Người dùng xác nhận đã gửi qua chat Zalo"
+            } else {
+                "QR kèm số tiền đã sao chép · dán vào chat Zalo rồi tự bấm Gửi"
+            }
+            return Pair("zalo", message)
+        }
+        val status = record?.optString("smsStatus")
         val message = when (status) {
             "sent" -> "SMS đã được gửi lên mạng · Ảnh lưu trên thiết bị"
             "simulated" -> "SMS ảo đã nằm trong mục Đã gửi, khách không nhận · Ảnh lưu trên thiết bị"
