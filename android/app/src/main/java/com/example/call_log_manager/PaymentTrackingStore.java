@@ -215,7 +215,7 @@ final class PaymentTrackingStore {
             null, null, "created_at ASC")) {
             while (cursor.moveToNext()) {
                 try {
-                    matches.add(new JSONObject(cursor.getString(1)));
+                    matches.add(new JSONObject(cursor.getString(0)));
                 } catch (JSONException ignored) {
                     // Skip a corrupt row and continue matching the rest.
                 }
