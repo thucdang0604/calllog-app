@@ -249,9 +249,6 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
             case "getSmsLicenseDetails":
                 getSmsLicenseDetails(result);
                 break;
-            case "activateSmsLicense":
-                activateSmsLicense(call, result);
-                break;
             case "applyServerLicenseToken":
                 applyServerLicenseToken(call, result);
                 break;
@@ -764,16 +761,6 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
             result.success(details.toString());
         } catch (Exception e) {
             result.error("LICENSE_ERROR", e.getMessage(), null);
-        }
-    }
-
-    private void activateSmsLicense(MethodCall call, Result result) {
-        String key = call.argument("key");
-        if (key != null && !key.isEmpty()) {
-            boolean success = LicenseManager.activateKey(context, key);
-            result.success(success);
-        } else {
-            result.success(false);
         }
     }
 

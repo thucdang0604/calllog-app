@@ -41,6 +41,7 @@ class AppUpdateService {
       if (currentVersion == null || currentVersion.isEmpty) {
         throw const FormatException('Không đọc được phiên bản ứng dụng.');
       }
+      if (!context.mounted) return;
 
       if (await _showReadyUpdateIfAvailable(
         context,

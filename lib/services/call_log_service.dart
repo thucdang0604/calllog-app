@@ -14,27 +14,16 @@ class CallLogService {
 
   /// Lấy danh sách call log (chỉ lấy 10 cuộc gọi mới nhất)
   Future<List<CallLogEntry>> getCallLogs({int limit = 10}) async {
-    try {
-      // Kiểm tra cache trước
-      if (_cachedCallLogs != null &&
-          _lastCacheTime != null &&
-          DateTime.now().difference(_lastCacheTime!) < _cacheTimeout) {
-        return _cachedCallLogs!.take(limit).toList();
-      }
-
-      // Lấy dữ liệu từ native system
-      List<CallLogEntry> systemLogs = await _getSystemCallLogs(limit: limit);
-
-      // Cập nhật cache
-      _cachedCallLogs = systemLogs;
-      _lastCacheTime = DateTime.now();
-
-      return systemLogs;
-    } catch (e) {
-      _cachedCallLogs = [];
-      _lastCacheTime = DateTime.now();
-      return [];
+    if (_cachedCallLogs != null &&
+        _lastCacheTime != null &&
+        DateTime.now().difference(_lastCacheTime!) < _cacheTimeout) {
+      return _cachedCallLogs!.take(limit).toList();
     }
+
+    final systemLogs = await _getSystemCallLogs(limit: limit);
+    _cachedCallLogs = systemLogs;
+    _lastCacheTime = DateTime.now();
+    return systemLogs;
   }
 
   /// Format số điện thoại
@@ -77,24 +66,17 @@ class CallLogService {
 
   /// Lấy dữ liệu từ native system
   Future<List<CallLogEntry>> _getSystemCallLogs({int limit = 10}) async {
-    try {
-      final hasPermission = await PermissionService().requestCallLogPermission();
-      if (!hasPermission) {
-        throw Exception('Không có quyền đọc call log');
-      }
-
-      final logs = await NativeCallLogService.getCallLogs(limit: limit);
-
-      final formattedLogs = logs.map((log) {
-        if (log.formattedNumber == null || log.formattedNumber!.isEmpty) {
-          return log.copyWith(formattedNumber: _formatPhoneNumber(log.number ?? ''));
-        }
-        return log;
-      }).toList();
-
-      return formattedLogs;
-    } catch (e) {
-      return [];
+    final hasPermission = await PermissionService().requestCallLogPermission();
+    if (!hasPermission) {
+      throw StateError('Không có quyền đọc call log');
     }
+
+    final logs = await NativeCallLogService.getCallLogs(limit: limit);
+    return logs.map((log) {
+      if (log.formattedNumber == null || log.formattedNumber!.isEmpty) {
+        return log.copyWith(formattedNumber: _formatPhoneNumber(log.number ?? ''));
+      }
+      return log;
+    }).toList();
   }
 }

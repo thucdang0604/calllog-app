@@ -5,6 +5,15 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+val licenseApiBaseUrl = providers.gradleProperty("LICENSE_API_BASE_URL")
+    .orElse(providers.environmentVariable("LICENSE_API_BASE_URL"))
+    .orElse("https://mylove-2026-sms-admin.web.app/api")
+    .get()
+    .trimEnd('/')
+val legacyCompatibleKeystore = providers.gradleProperty("CALLLOG_RELEASE_KEYSTORE")
+    .orElse("${System.getProperty("user.home")}/.android/debug.keystore")
+    .get()
+
 android {
     namespace = "com.example.call_log_manager"
     // ML Kit barcode processing compiles against API 36; min/target remain unchanged.
@@ -30,13 +39,26 @@ android {
         targetSdk = 34
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        buildConfigField("String", "LICENSE_API_BASE_URL", "\"$licenseApiBaseUrl\"")
+    }
+
+    buildFeatures {
+        buildConfig = true
+    }
+
+    signingConfigs {
+        create("releaseCompatible") {
+            // Keep the existing sideloaded app updatable; changing this key breaks APK upgrades.
+            storeFile = file(legacyCompatibleKeystore)
+            storePassword = providers.gradleProperty("CALLLOG_RELEASE_STORE_PASSWORD").orElse("android").get()
+            keyAlias = providers.gradleProperty("CALLLOG_RELEASE_KEY_ALIAS").orElse("androiddebugkey").get()
+            keyPassword = providers.gradleProperty("CALLLOG_RELEASE_KEY_PASSWORD").orElse("android").get()
+        }
     }
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("releaseCompatible")
         }
     }
 }

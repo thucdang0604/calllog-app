@@ -5,11 +5,12 @@ import android.content.Context;
 import android.content.Intent;
 import android.provider.Telephony;
 import android.util.Log;
+import android.widget.Toast;
 
-import java.io.File;
-import java.io.FileOutputStream;
-
-/** Preserve an MMS notification PDU if one arrives during the short role switch. */
+/**
+ * Warn when MMS arrives during the short role switch.
+ * shortcut: This cannot download the MMS payload; replace with a full MMS client if MMS receive becomes a supported flow.
+ */
 public final class IncomingMmsReceiver extends BroadcastReceiver {
     private static final String TAG = "IncomingMmsReceiver";
 
@@ -20,17 +21,11 @@ public final class IncomingMmsReceiver extends BroadcastReceiver {
         byte[] pdu = intent.getByteArrayExtra("data");
         if (pdu == null || pdu.length == 0) return;
 
-        File directory = new File(context.getFilesDir(), "mms_during_sms_role");
-        if (!directory.exists() && !directory.mkdirs()) {
-            Log.e(TAG, "Could not create MMS backup directory");
-            return;
-        }
-        File backup = new File(directory, System.currentTimeMillis() + ".pdu");
-        try (FileOutputStream stream = new FileOutputStream(backup)) {
-            stream.write(pdu);
-            Log.w(TAG, "MMS notification saved while CallLog held SMS role: " + backup);
-        } catch (Exception error) {
-            Log.e(TAG, "Could not preserve incoming MMS notification", error);
-        }
+        context.getSharedPreferences("incoming_mms", Context.MODE_PRIVATE)
+            .edit().putBoolean("unprocessed_notification", true).apply();
+        Log.w(TAG, "MMS arrived while CallLog was default; payload was not downloaded");
+        Toast.makeText(context,
+            "Đã nhận MMS khi CallLog tạm làm SMS mặc định. Nội dung MMS chưa được tải.",
+            Toast.LENGTH_LONG).show();
     }
 }

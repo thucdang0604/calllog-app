@@ -604,7 +604,18 @@ class OrderScanCaptureActivity : AppCompatActivity() {
 
     private fun finishZaloFlow(orderCode: String?) {
         if (!zaloFlowFinished.compareAndSet(false, true)) return
-        val qrImagePath = intent.getStringExtra(EXTRA_QR_IMAGE_PATH).orEmpty()
+        Thread {
+            val qrImagePath = try {
+                PaymentQrShareManager.awaitZaloQrImage(this, sessionId, 11_000L)
+            } catch (error: Exception) {
+                Log.w(TAG, "Could not read the prepared Zalo QR", error)
+                intent.getStringExtra(EXTRA_QR_IMAGE_PATH).orEmpty()
+            }
+            runOnUiThread { completeZaloFlow(orderCode, qrImagePath) }
+        }.start()
+    }
+
+    private fun completeZaloFlow(orderCode: String?, qrImagePath: String) {
         val hasQrImage = qrImagePath.isNotBlank()
         var qrCopied = false
         try {
@@ -625,7 +636,7 @@ class OrderScanCaptureActivity : AppCompatActivity() {
         val message = when {
             qrCopied -> "$scanResult QR kèm số tiền đã sao chép; dán ảnh trong chat Zalo rồi bấm Gửi."
             hasQrImage -> "$scanResult Không sao chép được ảnh QR; đang mở Zalo theo số khách."
-            else -> "$scanResult Đang mở Zalo theo số khách; chưa có QR đã xác nhận để sao chép."
+            else -> "$scanResult Không có ảnh QR sẵn sàng để sao chép; đang mở Zalo theo số khách."
         }
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
         try {

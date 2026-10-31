@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <exclude domain="database" path="." />
+    <exclude domain="sharedpref" path="payment_tracking.xml" />
+    <exclude domain="sharedpref" path="payment_account.xml" />
+    <exclude domain="sharedpref" path="nv_sms_license_prefs.xml" />
+    <exclude domain="sharedpref" path="fake_sms_role.xml" />
+    <exclude domain="file" path="payment_receipts/" />
+</full-backup-content>

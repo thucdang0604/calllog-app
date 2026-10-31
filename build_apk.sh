@@ -1,18 +1,19 @@
 #!/bin/bash
+set -e
 
 echo "Building Call Log Manager APK..."
 
 echo ""
-echo "Step 1: Cleaning previous builds..."
-flutter clean
-
-echo ""
-echo "Step 2: Getting dependencies..."
+echo "Getting dependencies..."
 flutter pub get
 
 echo ""
-echo "Step 3: Building APK..."
-flutter build apk --release
+echo "Building APK..."
+if [[ -n "${LICENSE_API_BASE_URL:-}" ]]; then
+  flutter build apk --release --dart-define="LICENSE_API_BASE_URL=$LICENSE_API_BASE_URL"
+else
+  flutter build apk --release
+fi
 
 echo ""
 echo "Build completed!"

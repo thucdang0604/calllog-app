@@ -16,6 +16,7 @@ import android.provider.Telephony;
 import android.view.Gravity;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -35,6 +36,8 @@ public final class FakeSmsRoleActivity extends Activity {
     private boolean scannerOpened;
     private String sessionId = "";
     private String previousSmsPackage = "";
+    private String trialRequestId = "";
+    private boolean trialRequestPending;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -44,6 +47,7 @@ public final class FakeSmsRoleActivity extends Activity {
             writeComplete = state.getBoolean("writeComplete", false);
             sessionId = state.getString("sessionId", "");
             previousSmsPackage = state.getString("previousSmsPackage", "");
+            trialRequestId = state.getString("trialRequestId", "");
         }
 
         if (getIntent().getBooleanExtra(EXTRA_RESTORE_ONLY, false)) {
@@ -152,12 +156,34 @@ public final class FakeSmsRoleActivity extends Activity {
     }
 
     private void writeFakeSms() {
-        if (writeComplete) return;
-        if (!LicenseManager.isSmsFeatureAvailable(this)) {
-            Toast.makeText(this, "⚠️ Đã hết 10 lượt trải nghiệm SMS ảo. Vui lòng mở App để kích hoạt!", Toast.LENGTH_LONG).show();
-            finish();
+        if (writeComplete || trialRequestPending) return;
+        if (LicenseManager.isLicenseActive(this)) {
+            writeFakeSmsRecord();
             return;
         }
+        trialRequestId = LicenseManager.getTrialRequestId(this,
+            getIntent().getStringExtra(EXTRA_PHONE), getIntent().getStringExtra(EXTRA_MESSAGE));
+        trialRequestPending = true;
+        showTrialWaitScreen();
+        LicenseManager.consumeTrialAsync(this, trialRequestId, result -> {
+            trialRequestPending = false;
+            if (isFinishing() || isDestroyed()) return;
+            if (!result.allowed) {
+                Toast.makeText(this, result.message, Toast.LENGTH_LONG).show();
+                writeComplete = true;
+                showRestoreScreen();
+                return;
+            }
+            writeFakeSmsRecord(result.remaining);
+        });
+    }
+
+    private void writeFakeSmsRecord() {
+        writeFakeSmsRecord(-1);
+    }
+
+    private void writeFakeSmsRecord(int remainingTrial) {
+        if (writeComplete) return;
         String phone = getIntent().getStringExtra(EXTRA_PHONE);
         String amount = getIntent().getStringExtra(EXTRA_AMOUNT);
         String message = getIntent().getStringExtra(EXTRA_MESSAGE);
@@ -174,18 +200,19 @@ public final class FakeSmsRoleActivity extends Activity {
             insertedUri = getContentResolver().insert(Telephony.Sms.Sent.CONTENT_URI, values);
             if (insertedUri == null) throw new IllegalStateException("Android không lưu được tin nhắn");
 
-            if (!LicenseManager.isLicenseActive(this)) {
-                LicenseManager.consumeTrial(this);
-            }
-
             sessionId = PaymentTrackingStore.createSmsSession(this, phone, amount, message);
             if (sessionId.isEmpty() || !PaymentTrackingStore.setSmsSimulated(this, sessionId)) {
                 throw new IllegalStateException("CallLog không lưu được khoản chuyển");
             }
+            if (!trialRequestId.isEmpty()) {
+                LicenseManager.completeTrialRequest(this, trialRequestId);
+                trialRequestId = "";
+            }
             PaymentTrackingEventBus.notifyRecordsChanged();
             FloatingWindowService.refreshPaymentQueueIfVisible();
-            Toast.makeText(this, "Đã ghi vào mục Đã gửi · không gửi qua SIM",
-                Toast.LENGTH_LONG).show();
+            Toast.makeText(this, remainingTrial >= 0
+                ? "Đã ghi SMS ảo · còn " + remainingTrial + "/10 lượt"
+                : "Đã ghi vào mục Đã gửi · không gửi qua SIM", Toast.LENGTH_LONG).show();
         } catch (Exception error) {
             if (insertedUri != null) {
                 try { getContentResolver().delete(insertedUri, null, null); }
@@ -206,6 +233,22 @@ public final class FakeSmsRoleActivity extends Activity {
                 .apply();
         }
         showRestoreScreen();
+    }
+
+    private void showTrialWaitScreen() {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setGravity(Gravity.CENTER);
+        int pad = (int) (28 * getResources().getDisplayMetrics().density);
+        root.setPadding(pad, pad, pad, pad);
+        root.addView(new ProgressBar(this));
+        TextView message = new TextView(this);
+        message.setText("Đang kiểm tra lượt SMS ảo với máy chủ...");
+        message.setTextSize(16);
+        message.setGravity(Gravity.CENTER);
+        message.setPadding(0, pad, 0, 0);
+        root.addView(message);
+        setContentView(root);
     }
 
     private void showRestoreScreen() {
@@ -229,11 +272,15 @@ public final class FakeSmsRoleActivity extends Activity {
         root.addView(title);
 
         TextView explanation = new TextView(this);
+        boolean mmsWasUnprocessed = getSharedPreferences("incoming_mms", MODE_PRIVATE)
+            .getBoolean("unprocessed_notification", false);
         explanation.setText((sessionId.isEmpty()
             ? "CallLog vẫn đang giữ vai trò ứng dụng SMS mặc định. "
             : "Tin nhắn đã nằm trong mục Đã gửi nhưng khách không nhận được. ")
             + "Hãy chọn lại ứng dụng SMS thường dùng ngay trong Cài đặt. "
-            + "Trong lúc CallLog là ứng dụng SMS mặc định, MMS có thể chưa hiện bình thường. "
+            + (mmsWasUnprocessed
+                ? "Đã đến một thông báo MMS trong lúc này; CallLog chưa tải được nội dung đó. "
+                : "Trong lúc CallLog là ứng dụng SMS mặc định, MMS có thể chưa hiện bình thường. ")
             + (sessionId.isEmpty() ? "" : "Sau khi quay lại, CallLog sẽ mở màn quét mã đơn."));
         explanation.setTextSize(16);
         explanation.setPadding(0, 0, 0, pad);
@@ -265,6 +312,8 @@ public final class FakeSmsRoleActivity extends Activity {
                 Toast.makeText(this, "CallLog vẫn là ứng dụng SMS mặc định",
                     Toast.LENGTH_LONG).show();
             } else {
+                getSharedPreferences("incoming_mms", MODE_PRIVATE).edit()
+                    .remove("unprocessed_notification").apply();
                 finishAfterRestore();
             }
         });
@@ -325,6 +374,7 @@ public final class FakeSmsRoleActivity extends Activity {
         outState.putBoolean("writeComplete", writeComplete);
         outState.putString("sessionId", sessionId);
         outState.putString("previousSmsPackage", previousSmsPackage);
+        outState.putString("trialRequestId", trialRequestId);
         super.onSaveInstanceState(outState);
     }
 }

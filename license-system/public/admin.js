@@ -140,6 +140,20 @@ import {
     $('transactionRows').innerHTML = rows || '<tr><td colspan="5" class="empty">Chưa có giao dịch.</td></tr>';
   }
 
+  function renderPagination() {
+    for (const [collection, id] of [
+      ['licenses', 'loadMoreLicenses'],
+      ['orders', 'loadMoreOrders'],
+      ['transactions', 'loadMoreTransactions'],
+    ]) $(id).hidden = !overview.hasMore?.[collection];
+  }
+
+  function loadedSummary() {
+    return `Đã tải ${overview.licenses.length}/${overview.totals?.licenses ?? overview.licenses.length} license, `
+      + `${overview.orders.length}/${overview.totals?.orders ?? overview.orders.length} đơn và `
+      + `${overview.transactions.length}/${overview.totals?.transactions ?? overview.transactions.length} giao dịch.`;
+  }
+
   function loadOverview() {
     if (overviewLoadPromise) return overviewLoadPromise;
     const refreshButton = $('refreshButton');
@@ -154,7 +168,8 @@ import {
         renderLicenses();
         renderOrders();
         renderTransactions();
-        message('pageMessage', `Đã tải ${overview.licenses.length} license, ${overview.orders.length} đơn và ${overview.transactions.length} giao dịch.`, 'success');
+        renderPagination();
+        message('pageMessage', loadedSummary(), 'success');
       } catch (error) {
         message('pageMessage', error.message, 'error');
         if (!authUser) setSignedIn(false);
@@ -164,6 +179,30 @@ import {
       }
     })();
     return overviewLoadPromise;
+  }
+
+  async function loadMore(collection, buttonId, render) {
+    const button = $(buttonId);
+    const target = overview;
+    const cursor = target.cursors?.[collection];
+    if (!cursor || button.disabled) return;
+    button.disabled = true;
+    button.textContent = 'Đang tải…';
+    try {
+      const result = await api(`/admin/page/${collection}?after=${encodeURIComponent(cursor)}`);
+      if (overview !== target) return;
+      target[collection].push(...result.items);
+      target.cursors[collection] = result.cursor;
+      target.hasMore[collection] = result.hasMore;
+      render();
+      renderPagination();
+      message('pageMessage', loadedSummary(), 'success');
+    } catch (error) {
+      message('pageMessage', error.message, 'error');
+    } finally {
+      button.disabled = false;
+      button.textContent = collection === 'licenses' ? 'Tải thêm license' : collection === 'orders' ? 'Tải thêm đơn' : 'Tải thêm giao dịch';
+    }
   }
 
   async function applyAction(deviceId, action, plan) {
@@ -223,6 +262,9 @@ import {
     message('loginMessage', 'Đã đăng xuất.');
   });
   $('refreshButton').addEventListener('click', loadOverview);
+  $('loadMoreLicenses').addEventListener('click', () => loadMore('licenses', 'loadMoreLicenses', renderLicenses));
+  $('loadMoreOrders').addEventListener('click', () => loadMore('orders', 'loadMoreOrders', renderOrders));
+  $('loadMoreTransactions').addEventListener('click', () => loadMore('transactions', 'loadMoreTransactions', renderTransactions));
   $('searchInput').addEventListener('input', renderLicenses);
   $('statusFilter').addEventListener('change', renderLicenses);
   $('grantForm').addEventListener('submit', async (event) => {

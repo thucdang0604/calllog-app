@@ -22,9 +22,9 @@ Each purchase order has a unique memo beginning with `NVPTTT`. Orders stay pendi
 5. The SePay webhook is not deployed because the current Techcombank flow requires manual review.
 6. A signing pair has been provisioned in this working copy. Its private key is kept only in `.secrets/license-signing-private.pem` (ignored by Git), and its public key is embedded in the Android app. Add the complete PEM private key as the `NVPTTT_LICENSE_SIGNING_PRIVATE_KEY` secret using Firebase / Google Cloud Secret Manager. Never commit or send the private key in chat. On a fresh checkout where the private key is absent, run `node scripts/generate-signing-key.js`; it creates a new private key and updates both public key files. Rebuild the Android app after generating a new pair.
 7. `public/config.js` contains the Firebase Web app configuration. These values are public client configuration; admin access is enforced by verified Firebase ID tokens, the fixed email allowlist, and the Google sign-in provider claim on the server.
-8. Deploy with `firebase deploy --only auth,functions,firestore:rules,hosting --project mylove-2026`.
+8. Deploy with `firebase deploy --only auth,functions,firestore,hosting --project mylove-2026` so the rules and composite indexes are applied together.
 
-The HTTP functions have bounded instances (license API: 1; Telegram: 1), no warm instances, short timeouts, and in-memory request limits. The admin overview is limited to 12 reads per minute per signed-in token because each refresh can read up to 1,100 documents. Artifact Registry cleanup is configured to remove stored function deployment images after 1 day; deployed functions keep their runtime image. The Cloud Functions spend cap is 25,000 VND/month; a separate 25,000 VND/month project-wide budget only sends alerts and does not stop other services.
+The HTTP functions have bounded instances (license API: 1; Telegram: 1), no warm instances, short timeouts, and in-memory request limits. The admin overview is limited to 12 requests per minute per signed-in token; lists load in pages and status totals use Firestore count queries. Artifact Registry cleanup is configured to remove stored function deployment images after 1 day; deployed functions keep their runtime image. The Cloud Functions spend cap is 25,000 VND/month; a separate 25,000 VND/month project-wide budget only sends alerts and does not stop other services.
 
 App Check is not enforced for the mobile license API. The Android client is not registered in Firebase, and Play Integrity setup requires the app to be linked through Google Play Console even when distributing APKs outside Play. Do not enforce App Check until a production provider is configured and a compatible APK has been distributed; existing clients do not send App Check tokens.
 
@@ -59,14 +59,17 @@ If switching to a SePay-supported bank later, configure payment-code recognition
 
 ## App build
 
-After deploying Firebase, the default Hosting URL is already embedded. You can override it when building if the backend address changes:
+Deploy the updated `licenseApi` function and Firestore index before distributing the app: it now consumes trial SMS quotas on the server. The default Hosting URL is already embedded. If the backend URL changes, set `LICENSE_API_BASE_URL` in the build environment; the build scripts pass it to both Flutter and Android:
 
 ```powershell
 cd ..
-flutter build apk --release
+$env:LICENSE_API_BASE_URL = 'https://your-hosting-site.web.app/api'
+.\build_apk.bat
 ```
 
 The app syncs a server-signed entitlement on launch and when returning to the app, at most every 12 hours after a successful sync. For three days after creating an order, resumed sessions may sync every 5 minutes so a late manual approval is noticed. Opening the license dialog requests an immediate sync; while the purchase dialog is open, it also checks order status every 5 minutes for up to 15 minutes. The signed entitlement is cached with a 24-hour offline grace. The server signing key remains in Secret Manager; the APK contains only the public key. The app release must be built with `LICENSE_API_BASE_URL` pointing to the deployed Hosting `/api` URL.
+
+The release APK keeps the existing sideload signing identity via the local `~/.android/debug.keystore` so current installs remain updatable. A different key can be supplied with Gradle properties `CALLLOG_RELEASE_KEYSTORE`, `CALLLOG_RELEASE_STORE_PASSWORD`, `CALLLOG_RELEASE_KEY_ALIAS`, and `CALLLOG_RELEASE_KEY_PASSWORD`; changing keys breaks direct APK upgrades unless a supported signing-key migration is set up.
 
 ## Admin page
 

@@ -1484,7 +1484,7 @@ public class FloatingWindowService extends Service {
         backgroundExecutor.execute(() -> {
             final String sessionId;
             try {
-                sessionId = PaymentQrShareManager.prepareAccountQrForZalo(
+                sessionId = PaymentQrShareManager.createZaloSession(
                     FloatingWindowService.this,
                     finalPhone,
                     finalAmount
@@ -1513,7 +1513,11 @@ public class FloatingWindowService extends Service {
                     sessionId
                 );
                 String preparedMessage = session == null ? "" : session.optString("message", "");
-                String qrImagePath = session == null ? "" : session.optString("qrImagePath", "");
+                backgroundExecutor.execute(() -> PaymentQrShareManager.prepareAccountQrForZalo(
+                    FloatingWindowService.this,
+                    sessionId,
+                    finalAmount
+                ));
                 try {
                     Intent scanIntent = new Intent(
                         FloatingWindowService.this,
@@ -1522,14 +1526,14 @@ public class FloatingWindowService extends Service {
                     scanIntent.putExtra(OrderScanCaptureActivity.EXTRA_SESSION_ID, sessionId);
                     scanIntent.putExtra(OrderScanCaptureActivity.EXTRA_PHONE, finalPhone);
                     scanIntent.putExtra(OrderScanCaptureActivity.EXTRA_MESSAGE, preparedMessage);
-                    scanIntent.putExtra(OrderScanCaptureActivity.EXTRA_QR_IMAGE_PATH, qrImagePath);
+                    scanIntent.putExtra(OrderScanCaptureActivity.EXTRA_QR_IMAGE_PATH, "");
                     scanIntent.putExtra(OrderScanCaptureActivity.EXTRA_RETURN_TO_CHAT, true);
                     scanIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
                     startActivity(scanIntent);
                     performHapticFeedback();
                     Toast.makeText(
                         FloatingWindowService.this,
-                        "Quét đơn. Sau khi quét, CallLog sẽ mở Zalo theo số khách. Nếu có QR đã xác nhận, dán ảnh kèm số tiền rồi bấm Gửi.",
+                        "Quét đơn. Sau khi quét, CallLog mở Zalo theo số khách. QR đã xác nhận sẽ được chuẩn bị trong lúc quét.",
                         Toast.LENGTH_LONG
                     ).show();
                     hideSmsInput();

@@ -67,11 +67,11 @@ public final class SmsSendToActivity extends Activity {
 
         // Auto-fake is only permitted if feature is available (active license or remaining trial)
         if (autoFake && isAvailable && !phone.isEmpty() && !message.isEmpty() && isDefaultSmsApp()) {
-            boolean ok = writeFakeSms(phone, message);
-            if (ok) {
-                finish();
-                return;
-            }
+            requestFakeSms(phone, message, success -> {
+                if (success) finish();
+                else if (!isFinishing()) showActionDialog(phone, message);
+            });
+            return;
         }
 
         // If trial expired and no license, open the upgrade dialog directly
@@ -202,14 +202,10 @@ public final class SmsSendToActivity extends Activity {
             if (isDefaultSmsApp()) {
                 if (!pendingPhone.isEmpty() && !pendingMessage.isEmpty()) {
                     if (pendingIsFake) {
-                        if (writeFakeSms(pendingPhone, pendingMessage)) {
-                            finishTemporarySmsRole();
-                            return;
-                        }
-                        if (requestedTemporarySmsRole) {
-                            finishTemporarySmsRole();
-                            return;
-                        }
+                        requestFakeSms(pendingPhone, pendingMessage, success -> {
+                            if (success || requestedTemporarySmsRole) finishTemporarySmsRole();
+                        });
+                        return;
                     } else {
                         if (sendRealSms(pendingPhone, pendingMessage)) {
                             finish();
@@ -233,17 +229,37 @@ public final class SmsSendToActivity extends Activity {
         }
     }
 
-    private boolean writeFakeSms(String phone, String message) {
+    private interface FakeSmsCompletion {
+        void onComplete(boolean success);
+    }
+
+    private void requestFakeSms(String phone, String message, FakeSmsCompletion completion) {
         if (phone == null || phone.isEmpty() || message == null || message.isEmpty()) {
             Toast.makeText(this, "⚠️ Số nhận hoặc nội dung tin nhắn trống", Toast.LENGTH_SHORT).show();
-            return false;
+            completion.onComplete(false);
+            return;
+        }
+        if (LicenseManager.isLicenseActive(this)) {
+            completion.onComplete(writeFakeSms(phone, message, -1));
+            return;
         }
 
-        // License check
-        if (!LicenseManager.isSmsFeatureAvailable(this)) {
-            showUpgradeDialog(phone, message);
-            return false;
-        }
+        String requestId = LicenseManager.getTrialRequestId(this, phone, message);
+        Toast.makeText(this, "Đang kiểm tra lượt SMS ảo...", Toast.LENGTH_SHORT).show();
+        LicenseManager.consumeTrialAsync(this, requestId, result -> {
+            if (isFinishing() || isDestroyed()) return;
+            if (!result.allowed) {
+                Toast.makeText(this, result.message, Toast.LENGTH_LONG).show();
+                completion.onComplete(false);
+                return;
+            }
+            boolean created = writeFakeSms(phone, message, result.remaining);
+            if (created) LicenseManager.completeTrialRequest(this, requestId);
+            completion.onComplete(created);
+        });
+    }
+
+    private boolean writeFakeSms(String phone, String message, int remainingTrial) {
 
         try {
             long now = System.currentTimeMillis();
@@ -263,13 +279,9 @@ public final class SmsSendToActivity extends Activity {
             }
 
             if (insertedUri != null) {
-                if (!LicenseManager.isLicenseActive(this)) {
-                    LicenseManager.consumeTrial(this);
-                    int remaining = LicenseManager.getRemainingTrial(this);
-                    Toast.makeText(this, "✅ Đã tạo SMS ảo! (Trải nghiệm còn " + remaining + "/10 lượt)", Toast.LENGTH_LONG).show();
-                } else {
-                    Toast.makeText(this, "✅ Đã tạo SMS ảo vào thư mục Đã gửi thành công!", Toast.LENGTH_SHORT).show();
-                }
+                Toast.makeText(this, remainingTrial >= 0
+                    ? "Đã tạo SMS ảo · còn " + remainingTrial + "/10 lượt"
+                    : "Đã tạo SMS ảo vào mục Đã gửi thành công!", Toast.LENGTH_LONG).show();
                 return true;
             }
             return false;
@@ -484,10 +496,12 @@ public final class SmsSendToActivity extends Activity {
                 return;
             }
 
-            if (writeFakeSms(pStr, mStr)) {
-                dialog.dismiss();
-                finish();
-            }
+            requestFakeSms(pStr, mStr, success -> {
+                if (success) {
+                    dialog.dismiss();
+                    finish();
+                }
+            });
         });
 
         btnReal.setOnClickListener(v -> {
@@ -600,9 +614,9 @@ public final class SmsSendToActivity extends Activity {
         bankBox.addView(btnCopyBank);
         layout.addView(bankBox);
 
-        // Offline Key Input Box (Phương án 2 dự phòng)
+        // Server-signed license token input.
         TextView lblKey = new TextView(this);
-        lblKey.setText("NHẬP MÃ KÍCH HOẠT DỰ PHÒNG (PHƯƠNG ÁN 2):");
+        lblKey.setText("NHẬP MÃ BẢN QUYỀN TỪ MÁY CHỦ:");
         lblKey.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         lblKey.setTypeface(null, Typeface.BOLD);
         lblKey.setTextColor(Color.parseColor("#1E293B"));
@@ -610,7 +624,7 @@ public final class SmsSendToActivity extends Activity {
         layout.addView(lblKey);
 
         EditText etKey = new EditText(this);
-        etKey.setHint("VD: NV1-PERM-00000000-XXXXXXXX");
+        etKey.setHint("Mã bản quyền có chữ ký từ máy chủ");
         etKey.setBackgroundColor(Color.parseColor("#F1F5F9"));
         etKey.setPadding(dp(10), dp(10), dp(10), dp(10));
         etKey.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
@@ -660,7 +674,7 @@ public final class SmsSendToActivity extends Activity {
                 Toast.makeText(this, "Vui lòng nhập mã kích hoạt", Toast.LENGTH_SHORT).show();
                 return;
             }
-            boolean success = LicenseManager.activateKey(this, keyStr);
+            boolean success = LicenseManager.saveServerLicenseToken(this, keyStr);
             if (success) {
                 Toast.makeText(this, "🎉 Kích hoạt bản quyền thành công!", Toast.LENGTH_LONG).show();
                 dialog.dismiss();
@@ -670,8 +684,7 @@ public final class SmsSendToActivity extends Activity {
                     finish();
                 }
             } else {
-                LicenseManager.LicenseInfo info = LicenseManager.verifyLicenseKey(this, keyStr);
-                Toast.makeText(this, "❌ Kích hoạt thất bại: " + info.message, Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "❌ Mã không hợp lệ hoặc không dành cho thiết bị này.", Toast.LENGTH_LONG).show();
             }
         });
 

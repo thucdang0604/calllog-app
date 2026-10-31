@@ -58,7 +58,7 @@
 
         <section class="panel">
           <div class="section-heading">
-            <div><h2>License theo thiết bị</h2><p class="muted">Danh sách gần nhất; tìm kiếm theo mã thiết bị, gói hoặc trạng thái.</p></div>
+            <div><h2>License theo thiết bị</h2><p class="muted">Tìm kiếm theo mã thiết bị, gói hoặc trạng thái. Danh sách tải theo từng trang.</p></div>
           </div>
           <div class="filters">
             <label class="search-label">Tìm kiếm<input id="searchInput" type="search" placeholder="SMS-…" /></label>
@@ -70,6 +70,7 @@
               <tbody id="licenseRows"><tr><td colspan="6" class="empty">Chưa tải dữ liệu.</td></tr></tbody>
             </table>
           </div>
+          <button class="button button-quiet" id="loadMoreLicenses" type="button" hidden>Tải thêm license</button>
         </section>
 
         <section class="panel">
@@ -77,6 +78,7 @@
           <div class="table-wrap">
             <table><thead><tr><th>Mã chuyển khoản</th><th>Thiết bị</th><th>Gói</th><th>Số tiền</th><th>Trạng thái</th><th>Tạo lúc</th><th>Thao tác</th></tr></thead><tbody id="orderRows"></tbody></table>
           </div>
+          <button class="button button-quiet" id="loadMoreOrders" type="button" hidden>Tải thêm đơn</button>
         </section>
 
         <section class="panel">
@@ -84,6 +86,7 @@
           <div class="table-wrap">
             <table><thead><tr><th>Mã giao dịch</th><th>Số tiền</th><th>Nội dung</th><th>Kết quả</th><th>Lý do</th></tr></thead><tbody id="transactionRows"></tbody></table>
           </div>
+          <button class="button button-quiet" id="loadMoreTransactions" type="button" hidden>Tải thêm giao dịch</button>
         </section>
       </section>
       <footer>NVPTTT · Bảng điều khiển nội bộ</footer>

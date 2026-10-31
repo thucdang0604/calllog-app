@@ -26,10 +26,14 @@ import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 final class PaymentQrShareManager {
     private static final String TAG = "PaymentQrShareManager";
     private static final String PREFS = "payment_account";
+    private static final ConcurrentHashMap<String, CountDownLatch> QR_PREPARATIONS = new ConcurrentHashMap<>();
     private static final String ZALO_PACKAGE = "com.zing.zalo";
 
     private PaymentQrShareManager() {}
@@ -93,7 +97,7 @@ final class PaymentQrShareManager {
             + Uri.encode(cleanAccount) + "-qr_only.png?accountName=" + encodedName;
     }
 
-    static String prepareAccountQrForZalo(
+    static String createZaloSession(
         Context context,
         String phone,
         String amount
@@ -119,52 +123,103 @@ final class PaymentQrShareManager {
         if (id.isEmpty()) {
             throw new IllegalStateException("Không lưu được khoản theo dõi Zalo.");
         }
-        if (qrConfigured) {
-            File directory = new File(context.getCacheDir(), "payment_qr");
-            if (!directory.exists() && !directory.mkdirs()) {
-                Log.w(TAG, "QR folder unavailable; continue opening the customer's Zalo chat");
-            } else {
-                File[] cachedImages = directory.listFiles();
-                if (cachedImages != null) {
-                    long staleBefore = System.currentTimeMillis() - 24L * 60L * 60L * 1000L;
-                    for (File cachedImage : cachedImages) {
-                        if (cachedImage.isFile() && cachedImage.lastModified() < staleBefore) {
-                            cachedImage.delete();
+        if (qrConfigured) QR_PREPARATIONS.put(id, new CountDownLatch(1));
+        PaymentTrackingEventBus.notifyRecordsChanged();
+        FloatingWindowService.refreshPaymentQueueIfVisible();
+        return id;
+    }
+
+    static void prepareAccountQrForZalo(Context context, String id, String amount) {
+        CountDownLatch preparation = QR_PREPARATIONS.get(id);
+        try {
+            Map<String, Object> settings = getSettings(context);
+            String bankName = String.valueOf(settings.get("bankName"));
+            String bankId = String.valueOf(settings.get("bankId"));
+            String accountNumber = String.valueOf(settings.get("accountNumber"));
+            String accountName = String.valueOf(settings.get("accountName"));
+            boolean qrConfigured = Boolean.TRUE.equals(settings.get("verified"))
+                && !bankId.isEmpty() && !accountNumber.isEmpty() && !accountName.isEmpty();
+            if (qrConfigured) {
+                File directory = new File(context.getCacheDir(), "payment_qr");
+                if (!directory.exists() && !directory.mkdirs()) {
+                    Log.w(TAG, "QR folder unavailable; continue opening the customer's Zalo chat");
+                } else {
+                    File[] cachedImages = directory.listFiles();
+                    if (cachedImages != null) {
+                        long staleBefore = System.currentTimeMillis() - 24L * 60L * 60L * 1000L;
+                        for (File cachedImage : cachedImages) {
+                            if (cachedImage.isFile() && cachedImage.lastModified() < staleBefore) {
+                                cachedImage.delete();
+                            }
                         }
                     }
-                }
-                String fileToken = UUID.randomUUID().toString();
-                File sourceQrFile = new File(directory, "zalo-qr-" + fileToken + ".png");
-                File transferCardFile = new File(directory, "zalo-transfer-" + fileToken + ".png");
-                try {
                     String qrUrl = createAccountOnlyQrUrl(bankId, accountNumber, accountName);
-                    downloadImage(qrUrl, sourceQrFile);
-                    createTransferCard(
-                        sourceQrFile,
-                        transferCardFile,
-                        bankName,
-                        accountNumber,
-                        accountName,
-                        amount
-                    );
-                    if (!PaymentTrackingStore.setZaloQrImagePath(
-                        context,
-                        id,
-                        transferCardFile.getAbsolutePath()
-                    )) {
-                        throw new IllegalStateException("Không lưu được ảnh QR chuyển khoản.");
+                    File sourceQrFile = new File(directory, "account-" + sha256(qrUrl) + ".png");
+                    String fileToken = UUID.randomUUID().toString();
+                    File transferCardFile = new File(directory, "zalo-transfer-" + fileToken + ".png");
+                    try {
+                        boolean cachedQr = sourceQrFile.isFile() && sourceQrFile.length() > 0;
+                        if (!cachedQr) {
+                            downloadImage(qrUrl, sourceQrFile);
+                        }
+                        try {
+                            createTransferCard(
+                                sourceQrFile,
+                                transferCardFile,
+                                bankName,
+                                accountNumber,
+                                accountName,
+                                amount
+                            );
+                        } catch (Exception cachedImageError) {
+                            if (!cachedQr) throw cachedImageError;
+                            sourceQrFile.delete();
+                            downloadImage(qrUrl, sourceQrFile);
+                            createTransferCard(
+                                sourceQrFile,
+                                transferCardFile,
+                                bankName,
+                                accountNumber,
+                                accountName,
+                                amount
+                            );
+                        }
+                        if (!PaymentTrackingStore.setZaloQrImagePath(
+                            context,
+                            id,
+                            transferCardFile.getAbsolutePath()
+                        )) {
+                            throw new IllegalStateException("Không lưu được ảnh QR chuyển khoản.");
+                        }
+                    } catch (Exception error) {
+                        Log.w(TAG, "QR was not prepared; continue opening the customer's Zalo chat", error);
+                        transferCardFile.delete();
                     }
-                } catch (Exception error) {
-                    Log.w(TAG, "QR was not prepared; continue opening the customer's Zalo chat", error);
-                    transferCardFile.delete();
-                } finally {
-                    sourceQrFile.delete();
                 }
+            }
+        } catch (Exception error) {
+            Log.w(TAG, "QR was not prepared; continue opening the customer's Zalo chat", error);
+        } finally {
+            if (preparation != null) {
+                preparation.countDown();
+                QR_PREPARATIONS.remove(id, preparation);
             }
         }
         PaymentTrackingEventBus.notifyRecordsChanged();
         FloatingWindowService.refreshPaymentQueueIfVisible();
-        return id;
+    }
+
+    static String awaitZaloQrImage(Context context, String id, long timeoutMillis) {
+        CountDownLatch preparation = QR_PREPARATIONS.remove(id);
+        if (preparation != null) {
+            try {
+                preparation.await(timeoutMillis, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        org.json.JSONObject record = PaymentTrackingStore.findRecord(context, id);
+        return record == null ? "" : record.optString("qrImagePath", "");
     }
 
     static void copyTransferCardToZaloClipboard(Context context, String imagePath) throws Exception {
@@ -288,8 +343,8 @@ final class PaymentQrShareManager {
         HttpURLConnection connection = null;
         try {
             connection = (HttpURLConnection) new URL(imageUrl).openConnection();
-            connection.setConnectTimeout(10_000);
-            connection.setReadTimeout(10_000);
+            connection.setConnectTimeout(4_000);
+            connection.setReadTimeout(6_000);
             connection.setRequestMethod("GET");
             connection.setRequestProperty("Accept", "image/png,image/*;q=0.9,*/*;q=0.5");
             int status = connection.getResponseCode();
@@ -312,5 +367,13 @@ final class PaymentQrShareManager {
         } finally {
             if (connection != null) connection.disconnect();
         }
+    }
+
+    private static String sha256(String value) throws Exception {
+        byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(value.getBytes(StandardCharsets.UTF_8));
+        StringBuilder output = new StringBuilder(digest.length * 2);
+        for (byte item : digest) output.append(String.format(java.util.Locale.ROOT, "%02x", item & 0xff));
+        return output.toString();
     }
 }

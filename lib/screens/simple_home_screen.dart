@@ -578,7 +578,11 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
         return;
       }
       _lastLicenseSyncAttemptAt = now;
-      final response = await _licenseApi.syncLicense(deviceId);
+      final previousDetails = await _readLicenseDetails(channel);
+      final response = await _licenseApi.syncLicense(
+        deviceId,
+        trialUsed: previousDetails?['usedTrial'] as int? ?? 0,
+      );
       final token = response['licenseToken']?.toString();
       if (token == null || token.isEmpty) return;
       final bool? applied = await channel.invokeMethod<bool>(
@@ -785,14 +789,18 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
         );
         final state = status['status']?.toString();
         if (state == 'paid') {
-          final synced = await _licenseApi.syncLicense(deviceId);
+          const channel = MethodChannel('call_log_manager');
+          final previousDetails = await _readLicenseDetails(channel);
+          final synced = await _licenseApi.syncLicense(
+            deviceId,
+            trialUsed: previousDetails?['usedTrial'] as int? ?? 0,
+          );
           final token = synced['licenseToken']?.toString();
           if (token == null || token.isEmpty) {
             throw const LicenseApiException(
               'Chưa nhận được dữ liệu kích hoạt.',
             );
           }
-          const channel = MethodChannel('call_log_manager');
           final applied = await channel.invokeMethod<bool>(
             'applyServerLicenseToken',
             {'token': token},
@@ -1099,7 +1107,7 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
                           controller: keyCtrl,
                           textCapitalization: TextCapitalization.characters,
                           decoration: const InputDecoration(
-                            hintText: 'Mã NV1-... hoặc mã server từ Telegram',
+                            hintText: 'Mã bản quyền có chữ ký từ máy chủ',
                             border: OutlineInputBorder(),
                           ),
                         ),
@@ -1109,16 +1117,10 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
                             final key = keyCtrl.text.trim();
                             if (key.isEmpty) return;
                             const channel = MethodChannel('call_log_manager');
-                            final isServerToken = key.split('.').length == 2;
-                            final ok = isServerToken
-                                ? await channel.invokeMethod<bool>(
-                                    'applyServerLicenseToken',
-                                    {'token': key},
-                                  )
-                                : await channel.invokeMethod<bool>(
-                                    'activateSmsLicense',
-                                    {'key': key},
-                                  );
+                            final ok = await channel.invokeMethod<bool>(
+                              'applyServerLicenseToken',
+                              {'token': key},
+                            );
                             if (ok == true && ctx.mounted) {
                               await _clearPendingOrder(deviceId);
                               await _loadConfig();

@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import '../models/call_log_entry.dart';
 
@@ -7,18 +6,12 @@ class NativeCallLogService {
 
   /// Lấy danh sách call log từ native Android (mặc định lấy 10 cuộc gọi mới nhất)
   static Future<List<CallLogEntry>> getCallLogs({int limit = 10}) async {
-    try {
-      final List<dynamic> result = await _channel.invokeMethod('getCallLogs', {
-        'limit': limit,
-      });
-
-      return result
-          .map((item) => CallLogEntry.fromMap(Map<String, dynamic>.from(item)))
-          .toList();
-    } catch (e) {
-      debugPrint('[NativeCallLogService] getCallLogs error: $e');
-      return [];
-    }
+    final List<dynamic> result = await _channel.invokeMethod('getCallLogs', {
+      'limit': limit,
+    });
+    return result
+        .map((item) => CallLogEntry.fromMap(Map<String, dynamic>.from(item)))
+        .toList();
   }
 
   /// Kiểm tra quyền

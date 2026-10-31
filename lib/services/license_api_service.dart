@@ -32,8 +32,13 @@ class LicenseApiService {
     'paymentCode': paymentCode,
   });
 
-  Future<Map<String, dynamic>> syncLicense(String deviceId) =>
-      _post('license/sync', {'deviceId': deviceId});
+  Future<Map<String, dynamic>> syncLicense(
+    String deviceId, {
+    int trialUsed = 0,
+  }) => _post('license/sync', {
+    'deviceId': deviceId,
+    'trialUsed': trialUsed,
+  });
 
   Future<Map<String, dynamic>> _post(
     String path,

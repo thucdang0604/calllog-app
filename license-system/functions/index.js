@@ -1,7 +1,7 @@
 const crypto = require('node:crypto');
 const express = require('express');
 const admin = require('firebase-admin');
-const { Firestore, FieldValue } = require('@google-cloud/firestore');
+const { Firestore, FieldPath, FieldValue } = require('@google-cloud/firestore');
 const { defineSecret, defineString } = require('firebase-functions/params');
 const { onRequest } = require('firebase-functions/v2/https');
 const {
@@ -10,6 +10,7 @@ const {
   timestampMillis,
 } = require('./pending_orders');
 const { createKeyedRateLimiter } = require('./rate_limiter');
+const { consumeTrialUsage, syncTrialUsage } = require('./trial_usage');
 
 admin.initializeApp();
 
@@ -73,6 +74,30 @@ const adminOverviewRateLimiter = createKeyedRateLimiter(
   60_000,
   (req) => String(req.get('Authorization') || ''),
 );
+const ADMIN_PAGE_SIZE = 100;
+
+async function readAdminPage(collectionName, cursorId = '') {
+  const collection = db.collection(collectionName);
+  let query = collection.orderBy(FieldPath.documentId(), 'desc');
+  if (cursorId) {
+    const cursor = await collection.doc(cursorId).get();
+    if (!cursor.exists) throw new Error('Trang dữ liệu không còn tồn tại. Hãy làm mới.');
+    query = query.startAfter(cursor);
+  }
+  const snapshot = await query.limit(ADMIN_PAGE_SIZE + 1).get();
+  const docs = snapshot.docs.slice(0, ADMIN_PAGE_SIZE);
+  return {
+    items: docs.map(serializeDoc),
+    hasMore: snapshot.docs.length > ADMIN_PAGE_SIZE,
+    cursor: docs.length ? docs[docs.length - 1].id : null,
+  };
+}
+
+function adminRequestAllowed(req, res) {
+  let allowed = false;
+  adminOverviewRateLimiter(req, res, () => { allowed = true; });
+  return allowed;
+}
 
 function sendError(res, status, message) {
   return res.status(status).json({ success: false, error: message });
@@ -110,16 +135,19 @@ function signingPrivateKey() {
   return LICENSE_SIGNING_PRIVATE_KEY.value().replace(/\\n/g, '\n');
 }
 
-function signEntitlement(license, deviceId) {
+function signEntitlement(license, deviceId, trialUsed = 0) {
   const now = Date.now();
   const active = license?.status === 'active' &&
     (license.expiresAt == null || license.expiresAt > now);
+  const status = active ? 'active'
+    : license?.status === 'active' ? 'expired' : (license?.status || 'none');
   const payload = {
     v: 1,
     deviceId,
-    status: active ? 'active' : (license?.status || 'none'),
+    status,
     plan: active ? license.plan : (license?.plan || 'TRIAL'),
     expiresAt: active ? (license.expiresAt ?? null) : null,
+    trialUsed: Math.max(0, Math.min(10, Math.trunc(Number(trialUsed) || 0))),
     issuedAt: now,
     offlineUntil: now + OFFLINE_GRACE_MS,
   };
@@ -283,10 +311,14 @@ app.post('/api/license/sync', createKeyedRateLimiter(
   (req) => normalizeDeviceId(req.body?.deviceId),
 ), async (req, res) => {
   const deviceId = normalizeDeviceId(req.body?.deviceId);
+  const reportedTrialUsed = Number(req.body?.trialUsed);
   if (!isValidDeviceId(deviceId)) return sendError(res, 400, 'Mã thiết bị không hợp lệ.');
   try {
     const reference = db.collection('licenses').doc(deviceId);
-    const snapshot = await reference.get();
+    const [snapshot, trialUsed] = await Promise.all([
+      reference.get(),
+      syncTrialUsage({ db, deviceId, reportedUsed: reportedTrialUsed }),
+    ]);
     let license = snapshot.exists ? snapshot.data() : null;
     if (license?.status === 'active' && license.expiresAt != null && license.expiresAt <= Date.now()) {
       await reference.update({ status: 'expired', updatedAt: FieldValue.serverTimestamp() });
@@ -294,7 +326,8 @@ app.post('/api/license/sync', createKeyedRateLimiter(
     }
     return res.json({
       success: true,
-      licenseToken: signEntitlement(license, deviceId),
+      licenseToken: signEntitlement(license, deviceId, trialUsed),
+      trialUsed,
       license: license ? {
         status: license.status,
         plan: license.plan,
@@ -304,6 +337,41 @@ app.post('/api/license/sync', createKeyedRateLimiter(
   } catch (error) {
     console.error('Could not sync license', error);
     return sendError(res, 500, 'Chưa đồng bộ được bản quyền.');
+  }
+});
+
+app.post('/api/trial/consume', createKeyedRateLimiter(
+  12,
+  60_000,
+  (req) => normalizeDeviceId(req.body?.deviceId),
+), async (req, res) => {
+  const deviceId = normalizeDeviceId(req.body?.deviceId);
+  const requestId = String(req.body?.requestId || '').trim().toLowerCase();
+  const reportedTrialUsed = Number(req.body?.trialUsed);
+  if (!isValidDeviceId(deviceId)) return sendError(res, 400, 'Mã thiết bị không hợp lệ.');
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(requestId)) {
+    return sendError(res, 400, 'Mã yêu cầu không hợp lệ.');
+  }
+  if (!Number.isInteger(reportedTrialUsed) || reportedTrialUsed < 0 || reportedTrialUsed > 10) {
+    return sendError(res, 400, 'Số lượt SMS ảo đã dùng không hợp lệ.');
+  }
+
+  try {
+    const result = await consumeTrialUsage({
+      db, deviceId, requestId, maxTrialCount: 10, reportedUsed: reportedTrialUsed,
+    });
+    if (result.status === 'conflict') return sendError(res, 409, 'Mã yêu cầu đã được dùng trên thiết bị khác.');
+    if (result.status === 'exhausted') return sendError(res, 403, 'Đã hết 10 lượt trải nghiệm SMS ảo.');
+    return res.json({
+      success: true,
+      licenseToken: signEntitlement(result.license, deviceId, result.trialUsed),
+      trialUsed: result.trialUsed,
+      remainingTrial: Math.max(0, 10 - result.trialUsed),
+      licensed: result.status === 'licensed',
+    });
+  } catch (error) {
+    console.error('Could not consume trial usage', error);
+    return sendError(res, 500, 'Chưa ghi nhận được lượt trải nghiệm. Hãy thử lại.');
   }
 });
 
@@ -468,11 +536,17 @@ async function sendTelegramLicenseCode(paymentCode, chatId) {
   }
   if (order.status !== 'paid') return { error: 'Đơn chưa được quản lý xác nhận đã nhận tiền.' };
 
-  const licenseSnapshot = await db.collection('licenses').doc(order.deviceId).get();
+  const [licenseSnapshot, trialUsageSnapshot] = await Promise.all([
+    db.collection('licenses').doc(order.deviceId).get(),
+    db.collection('trialUsage').doc(order.deviceId).get(),
+  ]);
   if (!licenseSnapshot.exists || licenseSnapshot.get('status') !== 'active') {
     return { error: 'Chưa tìm thấy license đang hoạt động cho đơn này.' };
   }
-  const token = signEntitlement(licenseSnapshot.data(), order.deviceId);
+  const trialUsed = trialUsageSnapshot.exists
+    ? Math.max(0, Math.min(10, Number(trialUsageSnapshot.get('used') || 0)))
+    : 0;
+  const token = signEntitlement(licenseSnapshot.data(), order.deviceId, trialUsed);
   await sendTelegramMessage(
     chatId,
     `Bản quyền đã được xác nhận. Mã kích hoạt dành riêng cho thiết bị ${order.deviceId}:\n\n${token}\n\nMở app > Bản quyền SMS > Nhập mã kích hoạt. Mã này chỉ dùng được trên đúng thiết bị trên.`,
@@ -652,41 +726,80 @@ telegramApp.post('/api/webhook/telegram', async (req, res) => {
 app.get('/api/admin/overview', async (req, res) => {
   const adminEmail = await requireAdmin(req, res);
   if (!adminEmail) return;
-  let isAllowed = false;
-  adminOverviewRateLimiter(req, res, () => {
-    isAllowed = true;
-  });
-  if (!isAllowed) return;
+  if (!adminRequestAllowed(req, res)) return;
 
   try {
-    const [licenseSnapshot, orderSnapshot, transactionSnapshot] = await Promise.all([
-      db.collection('licenses').orderBy('updatedAt', 'desc').limit(500).get(),
-      db.collection('orders').orderBy('createdAt', 'desc').limit(300).get(),
-      db.collection('transactions').orderBy('receivedAt', 'desc').limit(300).get(),
+    const [licenses, orders, transactions, active, activeExpired, expired, revoked, pending, unmatched,
+      licenseTotal, orderTotal, transactionTotal] = await Promise.all([
+      readAdminPage('licenses'),
+      readAdminPage('orders'),
+      readAdminPage('transactions'),
+      db.collection('licenses').where('status', '==', 'active').count().get(),
+      db.collection('licenses').where('status', '==', 'active')
+        .where('expiresAt', '<=', Date.now()).count().get(),
+      db.collection('licenses').where('status', '==', 'expired').count().get(),
+      db.collection('licenses').where('status', '==', 'revoked').count().get(),
+      db.collection('orders').where('status', '==', 'pending').count().get(),
+      db.collection('transactions').where('status', '==', 'unmatched').count().get(),
+      db.collection('licenses').count().get(),
+      db.collection('orders').count().get(),
+      db.collection('transactions').count().get(),
     ]);
-    const licenses = licenseSnapshot.docs.map(serializeDoc);
-    const orders = orderSnapshot.docs.map(serializeDoc);
-    const transactions = transactionSnapshot.docs.map(serializeDoc);
-    const now = Date.now();
-    const active = licenses.filter((item) => item.status === 'active' && (item.expiresAt == null || item.expiresAt > now));
     return res.json({
       success: true,
       adminEmail,
       counts: {
-        active: active.length,
-        expired: licenses.filter((item) => item.status === 'expired' || (item.status === 'active' && item.expiresAt != null && item.expiresAt <= now)).length,
-        revoked: licenses.filter((item) => item.status === 'revoked').length,
-        pending: orders.filter((item) => item.status === 'pending' && (item.expiresAt == null || item.expiresAt > now)).length,
-        unmatched: transactions.filter((item) => item.status === 'unmatched').length,
+        active: active.data().count - activeExpired.data().count,
+        expired: expired.data().count + activeExpired.data().count,
+        revoked: revoked.data().count,
+        pending: pending.data().count,
+        unmatched: unmatched.data().count,
+      },
+      totals: {
+        licenses: licenseTotal.data().count,
+        orders: orderTotal.data().count,
+        transactions: transactionTotal.data().count,
       },
       plans: PLANS,
-      licenses,
-      orders,
-      transactions,
+      licenses: licenses.items,
+      orders: orders.items,
+      transactions: transactions.items,
+      hasMore: {
+        licenses: licenses.hasMore,
+        orders: orders.hasMore,
+        transactions: transactions.hasMore,
+      },
+      cursors: {
+        licenses: licenses.cursor,
+        orders: orders.cursor,
+        transactions: transactions.cursor,
+      },
     });
   } catch (error) {
     console.error('Could not load admin overview', error);
     return sendError(res, 500, 'Không tải được dữ liệu quản trị.');
+  }
+});
+
+app.get('/api/admin/page/:collection', async (req, res) => {
+  const adminEmail = await requireAdmin(req, res);
+  if (!adminEmail) return;
+  if (!adminRequestAllowed(req, res)) return;
+
+  const collections = {
+    licenses: 'licenses',
+    orders: 'orders',
+    transactions: 'transactions',
+  };
+  const collectionName = collections[req.params.collection];
+  if (!collectionName) return sendError(res, 404, 'Danh sách không hợp lệ.');
+
+  try {
+    const page = await readAdminPage(collectionName, String(req.query.after || ''));
+    return res.json({ success: true, ...page });
+  } catch (error) {
+    console.error('Could not load admin page', error);
+    return sendError(res, 500, 'Không tải được trang dữ liệu tiếp theo.');
   }
 });
 
