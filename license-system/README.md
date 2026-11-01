@@ -37,13 +37,13 @@ The current receiving account is Techcombank (`19034108972011`), but SePay's cur
 Current manual-review flow:
 
 - The app creates a pending order and displays a QR, transfer memo, device ID, and order details. Repeated requests for the same device and plan reuse that pending order. The order does not expire while awaiting manual review.
-- The customer can share the device ID and order details from the app through Telegram. The deployed bot can record the order and send the activation code after manual approval.
+- The customer can share the device ID and order details from the app through Telegram. The bot records the order and tells the customer when it has been approved; it never sends a license token.
 - Open `https://mylove-2026-sms-admin.web.app/`, inspect the Techcombank account statement, and only then use **Xác nhận đã nhận tiền** for the matching order. The backend records the approver and activates the license in one Firestore transaction.
-- While the purchase dialog is open, the app checks order state immediately and then every 5 minutes for up to 15 minutes. The customer can still request a manual status check or paste a server-signed Telegram token in the activation field.
+- While the purchase dialog is open, the app checks order state immediately and then every 5 minutes for up to 15 minutes. The customer can still request a status check. Once approved, the app obtains and verifies a device-bound signed entitlement directly from the server; there is no customer-facing token input.
 
 ## Telegram bot
 
-The webhook and bot are deployed with the bot token and owner Telegram user ID configured. Customers send the app's copied message (device ID and order code) to the bot. The owner can use `/choxacnhan`, then `/duyet MÃ_ĐƠN` only after checking the bank statement. The bot sends a device-bound signed activation token; `/gui MÃ_ĐƠN` resends it, and the customer can use `/code MÃ_ĐƠN` to request it again. Telegram linkage is stored on the existing order document; the bot does not create a separate customer/session collection.
+The webhook and bot are deployed with the bot token and owner Telegram user ID configured. Customers send the app's copied message (device ID and order code) to the bot. The owner can use `/choxacnhan`, then `/duyet MÃ_ĐƠN` only after checking the bank statement. The bot sends an approval notice without a license token; `/gui MÃ_ĐƠN` resends the notice, and the legacy `/code MÃ_ĐƠN` command also returns the notice. Telegram linkage is stored on the existing order document; the bot does not create a separate customer/session collection.
 
 Setup after creating a bot with `@BotFather`:
 

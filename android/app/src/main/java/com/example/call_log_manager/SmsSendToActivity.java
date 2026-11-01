@@ -540,7 +540,7 @@ public final class SmsSendToActivity extends Activity {
         layout.addView(tvHeader);
 
         TextView tvDesc = new TextView(this);
-        tvDesc.setText("Tính năng tạo SMS ảo đã hết hạn dùng thử trên thiết bị này. Vui lòng thanh toán hoặc nhập mã kích hoạt để tiếp tục sử dụng.");
+        tvDesc.setText("Tính năng tạo SMS ảo đã hết hạn dùng thử trên thiết bị này. Mở ứng dụng để chọn gói và lấy mã đơn chuyển khoản. Sau khi quản lý duyệt, ứng dụng sẽ tự đồng bộ bản quyền.");
         tvDesc.setTextColor(Color.parseColor("#4B5563"));
         tvDesc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         tvDesc.setPadding(0, dp(4), 0, dp(12));
@@ -578,70 +578,22 @@ public final class SmsSendToActivity extends Activity {
         devBox.addView(btnCopyDev);
         layout.addView(devBox);
 
-        // Banking Info Box
-        LinearLayout bankBox = new LinearLayout(this);
-        bankBox.setOrientation(LinearLayout.VERTICAL);
-        bankBox.setBackgroundColor(Color.parseColor("#ECFDF5"));
-        bankBox.setPadding(dp(12), dp(10), dp(12), dp(10));
-        LinearLayout.LayoutParams lpBank = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lpBank.setMargins(0, dp(10), 0, dp(10));
-        bankBox.setLayoutParams(lpBank);
-
-        TextView lblBank = new TextView(this);
-        lblBank.setText("THÔNG TIN CHUYỂN KHOẢN (PHƯƠNG ÁN 1):");
-        lblBank.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
-        lblBank.setTextColor(Color.parseColor("#065F46"));
-        lblBank.setTypeface(null, Typeface.BOLD);
-        bankBox.addView(lblBank);
-
-        String transferContent = "SMS " + deviceId.replace("SMS-", "").replace("-", "");
-        TextView tvBankInfo = new TextView(this);
-        tvBankInfo.setText("• Ngân hàng: Techcombank\n• STK: 19034108972011\n• Chủ TK: DANG TRI THUC\n• Nội dung: " + transferContent);
-        tvBankInfo.setTextColor(Color.parseColor("#064E3B"));
-        tvBankInfo.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        tvBankInfo.setPadding(0, dp(4), 0, dp(6));
-        bankBox.addView(tvBankInfo);
-
-        Button btnCopyBank = new Button(this);
-        btnCopyBank.setText("📋 Sao chép nội dung chuyển khoản");
-        btnCopyBank.setBackgroundColor(Color.parseColor("#A7F3D0"));
-        btnCopyBank.setTextColor(Color.parseColor("#065F46"));
-        btnCopyBank.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        btnCopyBank.setOnClickListener(v -> {
-            copyToClipboard(transferContent, "Đã sao chép nội dung: " + transferContent);
-        });
-        bankBox.addView(btnCopyBank);
-        layout.addView(bankBox);
-
-        // Server-signed license token input.
-        TextView lblKey = new TextView(this);
-        lblKey.setText("NHẬP MÃ BẢN QUYỀN TỪ MÁY CHỦ:");
-        lblKey.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        lblKey.setTypeface(null, Typeface.BOLD);
-        lblKey.setTextColor(Color.parseColor("#1E293B"));
-        lblKey.setPadding(0, dp(4), 0, dp(4));
-        layout.addView(lblKey);
-
-        EditText etKey = new EditText(this);
-        etKey.setHint("Mã bản quyền có chữ ký từ máy chủ");
-        etKey.setBackgroundColor(Color.parseColor("#F1F5F9"));
-        etKey.setPadding(dp(10), dp(10), dp(10), dp(10));
-        etKey.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        etKey.setTypeface(Typeface.MONOSPACE);
-        layout.addView(etKey);
-
-        Button btnActivate = new Button(this);
-        btnActivate.setText("🔑 KÍCH HOẠT BẰNG MÃ");
-        btnActivate.setBackgroundColor(Color.parseColor("#10B981"));
-        btnActivate.setTextColor(Color.WHITE);
-        btnActivate.setTypeface(null, Typeface.BOLD);
-        btnActivate.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        LinearLayout.LayoutParams lpAct = new LinearLayout.LayoutParams(
+        Button btnOpenApp = new Button(this);
+        btnOpenApp.setText("Mở ứng dụng để đăng ký bản quyền");
+        btnOpenApp.setBackgroundColor(Color.parseColor("#10B981"));
+        btnOpenApp.setTextColor(Color.WHITE);
+        btnOpenApp.setTypeface(null, Typeface.BOLD);
+        btnOpenApp.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        LinearLayout.LayoutParams lpOpen = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, dp(42));
-        lpAct.setMargins(0, dp(6), 0, dp(12));
-        btnActivate.setLayoutParams(lpAct);
-        layout.addView(btnActivate);
+        lpOpen.setMargins(0, dp(10), 0, dp(12));
+        btnOpenApp.setLayoutParams(lpOpen);
+        btnOpenApp.setOnClickListener(v -> {
+            startActivity(new Intent(this, MainActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP));
+            finish();
+        });
+        layout.addView(btnOpenApp);
 
         // Emergency fallback: Send real SMS via carrier SIM so driver isn't blocked
         if (fallbackPhone != null && !fallbackPhone.isEmpty() && fallbackMessage != null && !fallbackMessage.isEmpty()) {
@@ -661,34 +613,12 @@ public final class SmsSendToActivity extends Activity {
             layout.addView(btnEmergencyReal);
         }
 
-        AlertDialog dialog = new AlertDialog.Builder(this)
+        new AlertDialog.Builder(this)
             .setTitle("Bản Quyền Tính Năng SMS Ảo")
             .setView(scrollView)
             .setNegativeButton("Đóng", (d, w) -> finish())
             .setOnCancelListener(d -> finish())
-            .create();
-
-        btnActivate.setOnClickListener(v -> {
-            String keyStr = etKey.getText().toString().trim();
-            if (keyStr.isEmpty()) {
-                Toast.makeText(this, "Vui lòng nhập mã kích hoạt", Toast.LENGTH_SHORT).show();
-                return;
-            }
-            boolean success = LicenseManager.saveServerLicenseToken(this, keyStr);
-            if (success) {
-                Toast.makeText(this, "🎉 Kích hoạt bản quyền thành công!", Toast.LENGTH_LONG).show();
-                dialog.dismiss();
-                if (fallbackPhone != null && !fallbackPhone.isEmpty()) {
-                    showActionDialog(fallbackPhone, fallbackMessage);
-                } else {
-                    finish();
-                }
-            } else {
-                Toast.makeText(this, "❌ Mã không hợp lệ hoặc không dành cho thiết bị này.", Toast.LENGTH_LONG).show();
-            }
-        });
-
-        dialog.show();
+            .show();
     }
 
     private void copyToClipboard(String text, String toastMsg) {

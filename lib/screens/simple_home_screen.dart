@@ -723,7 +723,6 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
   }
 
   Future<void> _showLicenseModal() async {
-    final keyCtrl = TextEditingController();
     await _syncLicenseFromServer(force: true);
     const deviceIdChannel = MethodChannel('call_log_manager');
     String deviceId = '';
@@ -877,7 +876,7 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
             automaticPaymentCheckStopped = true;
             update(() {
               paymentMessage =
-                  'Đã dừng tự kiểm tra sau 15 phút để tiết kiệm chi phí. Bạn vẫn có thể kiểm tra thủ công hoặc nhận mã qua Telegram.';
+                  'Đã dừng tự kiểm tra sau 15 phút để tiết kiệm chi phí. Sau khi quản lý duyệt, hãy mở lại app hoặc bấm kiểm tra trạng thái.';
             });
             return;
           }
@@ -1030,7 +1029,7 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
                       ),
                       const SizedBox(height: 6),
                       const Text(
-                        'Sau khi chuyển khoản, gửi mã máy và mã đơn cho bot/quản lý trên Telegram. License chỉ được kích hoạt sau khi quản lý kiểm tra thấy tiền vào tài khoản.',
+                        'Sau khi chuyển khoản, gửi mã máy và mã đơn cho bot/quản lý trên Telegram. Quản lý kiểm tra tiền vào tài khoản rồi duyệt; app sẽ tự kích hoạt khi đồng bộ.',
                         style: TextStyle(fontSize: 12, height: 1.4),
                       ),
                       OutlinedButton.icon(
@@ -1095,51 +1094,6 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
                         paymentMessage!,
                         style: TextStyle(color: Colors.red[700], fontSize: 12),
                       ),
-                    const Divider(),
-                    ExpansionTile(
-                      tilePadding: EdgeInsets.zero,
-                      title: const Text(
-                        'Nhập mã kích hoạt',
-                        style: TextStyle(fontSize: 13),
-                      ),
-                      children: [
-                        TextField(
-                          controller: keyCtrl,
-                          textCapitalization: TextCapitalization.characters,
-                          decoration: const InputDecoration(
-                            hintText: 'Mã bản quyền có chữ ký từ máy chủ',
-                            border: OutlineInputBorder(),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        ElevatedButton(
-                          onPressed: () async {
-                            final key = keyCtrl.text.trim();
-                            if (key.isEmpty) return;
-                            const channel = MethodChannel('call_log_manager');
-                            final ok = await channel.invokeMethod<bool>(
-                              'applyServerLicenseToken',
-                              {'token': key},
-                            );
-                            if (ok == true && ctx.mounted) {
-                              await _clearPendingOrder(deviceId);
-                              await _loadConfig();
-                              if (ctx.mounted) Navigator.pop(ctx);
-                            } else if (mounted && ctx.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text(
-                                    'Mã không hợp lệ hoặc không dành cho thiết bị này.',
-                                  ),
-                                ),
-                              );
-                            }
-                          },
-                          child: const Text('Kích hoạt bằng mã'),
-                        ),
-                        const SizedBox(height: 8),
-                      ],
-                    ),
                   ],
                 ),
               ),
@@ -1150,7 +1104,6 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
     ).whenComplete(() {
       sheetIsOpen = false;
       paymentTimer?.cancel();
-      keyCtrl.dispose();
     });
   }
 

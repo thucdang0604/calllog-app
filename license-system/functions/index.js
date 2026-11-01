@@ -401,6 +401,7 @@ async function approvePendingOrder(paymentCode, approvedBy, approvalMethod = 'da
         deviceId: order.deviceId,
         plan: order.plan,
         amount: order.amount,
+        telegramChatId: String(order.telegramChatId || ''),
       };
     }
     if (order.status !== 'pending') {
@@ -461,6 +462,7 @@ async function approvePendingOrder(paymentCode, approvedBy, approvalMethod = 'da
       plan: order.plan,
       amount: order.amount,
       license: licenseRecord,
+      telegramChatId: String(order.telegramChatId || ''),
     };
   });
 }
@@ -527,7 +529,7 @@ async function connectTelegramOrder(paymentCode, deviceId, chatId, userId) {
   });
 }
 
-async function sendTelegramLicenseCode(paymentCode, chatId) {
+async function sendTelegramActivationNotice(paymentCode, chatId) {
   const orderSnapshot = await db.collection('orders').doc(paymentCode).get();
   if (!orderSnapshot.exists) return { error: 'Không tìm thấy mã đơn này.' };
   const order = orderSnapshot.data();
@@ -535,21 +537,9 @@ async function sendTelegramLicenseCode(paymentCode, chatId) {
     return { error: 'Tài khoản Telegram này chưa được liên kết với đơn.' };
   }
   if (order.status !== 'paid') return { error: 'Đơn chưa được quản lý xác nhận đã nhận tiền.' };
-
-  const [licenseSnapshot, trialUsageSnapshot] = await Promise.all([
-    db.collection('licenses').doc(order.deviceId).get(),
-    db.collection('trialUsage').doc(order.deviceId).get(),
-  ]);
-  if (!licenseSnapshot.exists || licenseSnapshot.get('status') !== 'active') {
-    return { error: 'Chưa tìm thấy license đang hoạt động cho đơn này.' };
-  }
-  const trialUsed = trialUsageSnapshot.exists
-    ? Math.max(0, Math.min(10, Number(trialUsageSnapshot.get('used') || 0)))
-    : 0;
-  const token = signEntitlement(licenseSnapshot.data(), order.deviceId, trialUsed);
   await sendTelegramMessage(
     chatId,
-    `Bản quyền đã được xác nhận. Mã kích hoạt dành riêng cho thiết bị ${order.deviceId}:\n\n${token}\n\nMở app > Bản quyền SMS > Nhập mã kích hoạt. Mã này chỉ dùng được trên đúng thiết bị trên.`,
+    `Đơn ${paymentCode} đã được duyệt cho thiết bị ${order.deviceId}. Mở lại app > Bản quyền SMS để tự đồng bộ bản quyền. Nếu màn hình QR còn mở, bấm “Kiểm tra trạng thái kích hoạt”. Không cần nhập mã.`,
   );
   return { deviceId: order.deviceId };
 }
@@ -606,23 +596,23 @@ async function handleTelegramUpdate(update) {
       return;
     }
     const customerChatId = String(orderSnapshot.get('telegramChatId') || '');
-    if (!customerChatId) {
-      await sendTelegramMessage(chatId, 'Khách chưa gửi mã máy qua bot nên chưa có nơi nhận mã kích hoạt.');
-      return;
-    }
     const result = await approvePendingOrder(commandArgument, `telegram:${userId}`, 'telegram');
     if (result.error) {
       await sendTelegramMessage(chatId, result.error.message);
       return;
     }
-    const delivery = await sendTelegramLicenseCode(commandArgument, customerChatId);
-    if (delivery.error) {
-      await sendTelegramMessage(chatId, `Đơn đã được duyệt nhưng chưa gửi được mã: ${delivery.error}`);
-      return;
+    if (customerChatId) {
+      try {
+        const delivery = await sendTelegramActivationNotice(commandArgument, customerChatId);
+        if (delivery.error) await sendTelegramMessage(chatId, `Đơn đã được duyệt nhưng chưa báo được cho khách: ${delivery.error}`);
+      } catch (error) {
+        console.error('Could not send Telegram activation notice', error);
+        await sendTelegramMessage(chatId, 'Đơn đã được duyệt nhưng chưa báo được cho khách. Khách có thể mở app để đồng bộ.');
+      }
     }
     await sendTelegramMessage(
       chatId,
-      `Đã xác nhận ${result.amount.toLocaleString('vi-VN')}đ và gửi mã kích hoạt cho ${result.deviceId}.`,
+      `Đã xác nhận ${result.amount.toLocaleString('vi-VN')}đ cho ${result.deviceId}. App của khách sẽ tự đồng bộ bản quyền.`,
     );
     return;
   }
@@ -640,13 +630,13 @@ async function handleTelegramUpdate(update) {
       await sendTelegramMessage(chatId, 'Đơn chưa liên kết với Telegram của khách.');
       return;
     }
-    const result = await sendTelegramLicenseCode(commandArgument, customerChatId);
-    await sendTelegramMessage(chatId, result.error || `Đã gửi lại mã cho ${result.deviceId}.`);
+    const result = await sendTelegramActivationNotice(commandArgument, customerChatId);
+    await sendTelegramMessage(chatId, result.error || `Đã gửi lại thông báo cho ${result.deviceId}.`);
     return;
   }
 
   if (isAdmin && commandName === 'trogiup') {
-    await sendTelegramMessage(chatId, 'Lệnh quản lý:\n/choxacnhan — xem đơn chờ\n/duyet MÃ_ĐƠN — chỉ dùng sau khi đã thấy tiền vào tài khoản\n/gui MÃ_ĐƠN — gửi lại mã kích hoạt');
+    await sendTelegramMessage(chatId, 'Lệnh quản lý:\n/choxacnhan — xem đơn chờ\n/duyet MÃ_ĐƠN — chỉ dùng sau khi đã thấy tiền vào tài khoản\n/gui MÃ_ĐƠN — gửi lại thông báo đã duyệt');
     return;
   }
 
@@ -657,10 +647,10 @@ async function handleTelegramUpdate(update) {
       if (result.error) {
         await sendTelegramMessage(chatId, result.error);
       } else if (result.status === 'paid') {
-        const delivery = await sendTelegramLicenseCode(startPaymentCode, chatId);
+        const delivery = await sendTelegramActivationNotice(startPaymentCode, chatId);
         if (delivery.error) await sendTelegramMessage(chatId, delivery.error);
       } else {
-        await sendTelegramMessage(chatId, `Đã ghi nhận ${result.deviceId}. Quản lý sẽ đối soát tài khoản trước khi gửi mã kích hoạt.`);
+        await sendTelegramMessage(chatId, `Đã ghi nhận ${result.deviceId}. Quản lý sẽ đối soát tài khoản trước khi app tự kích hoạt.`);
       }
     } else {
       await sendTelegramMessage(chatId, 'Hãy gửi thông tin đã sao chép trong app, gồm Mã máy và Mã đơn.');
@@ -673,7 +663,7 @@ async function handleTelegramUpdate(update) {
       await sendTelegramMessage(chatId, 'Cú pháp: /code NVPTTT...');
       return;
     }
-    const result = await sendTelegramLicenseCode(commandArgument, chatId);
+    const result = await sendTelegramActivationNotice(commandArgument, chatId);
     if (result.error) await sendTelegramMessage(chatId, result.error);
     return;
   }
@@ -702,13 +692,13 @@ async function handleTelegramUpdate(update) {
     return;
   }
   if (result.status === 'paid') {
-    const delivery = await sendTelegramLicenseCode(paymentCode, chatId);
+    const delivery = await sendTelegramActivationNotice(paymentCode, chatId);
     if (delivery.error) await sendTelegramMessage(chatId, delivery.error);
     return;
   }
   await sendTelegramMessage(
     chatId,
-    `Đã ghi nhận mã máy ${result.deviceId} cho đơn ${paymentCode}. Quản lý sẽ đối soát tài khoản; bot chỉ gửi mã kích hoạt sau khi được duyệt.`,
+    `Đã ghi nhận mã máy ${result.deviceId} cho đơn ${paymentCode}. Quản lý sẽ đối soát tài khoản; sau khi được duyệt, app sẽ tự đồng bộ bản quyền.`,
   );
 }
 
@@ -811,6 +801,14 @@ app.post('/api/admin/approve-order', async (req, res) => {
   try {
     const result = await approvePendingOrder(paymentCode, adminEmail, 'dashboard');
     if (result.error) return sendError(res, result.error.status, result.error.message);
+    if (!result.alreadyPaid && result.telegramChatId) {
+      try {
+        await sendTelegramActivationNotice(paymentCode, result.telegramChatId);
+      } catch (error) {
+        // Approval is committed; a Telegram failure must not make the admin retry payment approval.
+        console.error('Could not send Telegram activation notice', error);
+      }
+    }
     return res.json({
       success: true,
       alreadyPaid: result.alreadyPaid,
