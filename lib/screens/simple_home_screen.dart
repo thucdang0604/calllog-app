@@ -768,6 +768,7 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
       {'id': 'PERM', 'title': 'Vĩnh viễn', 'price': '999.999đ'},
     ];
     final isLicensed = _licenseDetails?['isLicensed'] == true;
+    final hasPermanentLicense = isLicensed && _licenseDetails?['plan'] == 'PERM';
     final remainingTrial = _licenseDetails?['remainingTrial'] as int? ?? 0;
     Map<String, dynamic>? order;
     Timer? paymentTimer;
@@ -950,12 +951,16 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
                             : 'Đã dùng hết lượt trải nghiệm miễn phí.',
                       ),
                     const SizedBox(height: 14),
-                    const Text(
-                      'Chọn gói bản quyền',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 8),
-                    for (final plan in plans)
+                    if (hasPermanentLicense)
+                      const Text('Gói vĩnh viễn đã kích hoạt. Không cần chuyển khoản thêm.'),
+                    if (!hasPermanentLicense) ...[
+                      const Text(
+                        'Chọn gói bản quyền',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                    if (!hasPermanentLicense) for (final plan in plans)
                       SizedBox(
                         width: double.infinity,
                         child: OutlinedButton(

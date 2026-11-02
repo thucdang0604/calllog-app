@@ -91,6 +91,25 @@ final class PaymentTrackingStore {
         return records;
     }
 
+    static synchronized int importRecords(Context context, JSONArray records) throws JSONException {
+        SQLiteDatabase db = database(context);
+        int imported = 0;
+        db.beginTransaction();
+        try {
+            for (int index = 0; index < records.length(); index++) {
+                JSONObject record = records.getJSONObject(index);
+                if (putRecord(db, record, true) == -1) {
+                    throw new IllegalStateException("Một khoản đã tồn tại trong lúc khôi phục. Hãy thử lại.");
+                }
+                imported++;
+            }
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+        }
+        return imported;
+    }
+
     static synchronized String createSmsSession(Context context, String phone, String amount, String message) {
         JSONObject record = new JSONObject();
         String id = UUID.randomUUID().toString();

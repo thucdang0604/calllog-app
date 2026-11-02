@@ -357,7 +357,7 @@ public final class FakeSmsRoleActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (!writeComplete || !isDefaultSmsApp()) {
+        if (!isDefaultSmsApp()) {
             super.onBackPressed();
             return;
         }

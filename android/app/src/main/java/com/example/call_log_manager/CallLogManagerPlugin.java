@@ -49,16 +49,21 @@ import io.flutter.plugin.common.MethodChannel.MethodCallHandler;
 import io.flutter.plugin.common.MethodChannel.Result;
 import io.flutter.plugin.common.PluginRegistry;
 
-public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, ActivityAware, PluginRegistry.RequestPermissionsResultListener {
+public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, ActivityAware,
+    PluginRegistry.RequestPermissionsResultListener, PluginRegistry.ActivityResultListener {
     private static final String CHANNEL = "call_log_manager";
     private static final int PERMISSION_REQUEST_CODE = 1001;
     private static final int SAVE_PAYMENT_IMAGE_PERMISSION_REQUEST_CODE = 1002;
     private static final int RECEIVE_SMS_PERMISSION_REQUEST_CODE = 1003;
+    private static final int EXPORT_PAYMENT_BACKUP_REQUEST_CODE = 1004;
+    private static final int IMPORT_PAYMENT_BACKUP_REQUEST_CODE = 1005;
 
     private MethodChannel channel;
     private EventChannel paymentTrackingEvents;
     private Context context;
     private Activity activity;
+    private ActivityPluginBinding activityBinding;
+    private Result pendingPaymentBackupResult;
     private Result pendingPermissionResult;
     private Result pendingIncomingSmsPermissionResult;
     private Result pendingPaymentImagePermissionResult;
@@ -91,22 +96,30 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
     @Override
     public void onAttachedToActivity(ActivityPluginBinding binding) {
         this.activity = binding.getActivity();
+        this.activityBinding = binding;
         binding.addRequestPermissionsResultListener(this);
+        binding.addActivityResultListener(this);
     }
 
     @Override
     public void onDetachedFromActivityForConfigChanges() {
+        if (activityBinding != null) activityBinding.removeActivityResultListener(this);
+        this.activityBinding = null;
         this.activity = null;
     }
 
     @Override
     public void onReattachedToActivityForConfigChanges(ActivityPluginBinding binding) {
         this.activity = binding.getActivity();
+        this.activityBinding = binding;
         binding.addRequestPermissionsResultListener(this);
+        binding.addActivityResultListener(this);
     }
 
     @Override
     public void onDetachedFromActivity() {
+        if (activityBinding != null) activityBinding.removeActivityResultListener(this);
+        this.activityBinding = null;
         this.activity = null;
     }
 
@@ -142,6 +155,12 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
                 break;
             case "getPaymentTrackingRecords":
                 getPaymentTrackingRecords(result);
+                break;
+            case "exportPaymentBackup":
+                openPaymentBackupPicker(false, result);
+                break;
+            case "importPaymentBackup":
+                openPaymentBackupPicker(true, result);
                 break;
             case "getPaymentAccountSettings":
                 result.success(PaymentQrShareManager.getSettings(context));
@@ -521,6 +540,58 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
             output.add(item);
         }
         result.success(output);
+    }
+
+    private void openPaymentBackupPicker(boolean importing, Result result) {
+        if (activity == null) {
+            result.error("NO_ACTIVITY", "Không mở được màn chọn tệp.", null);
+            return;
+        }
+        if (pendingPaymentBackupResult != null) {
+            result.error("BACKUP_BUSY", "Đang chọn một tệp sao lưu khác.", null);
+            return;
+        }
+        Intent intent = new Intent(importing ? Intent.ACTION_OPEN_DOCUMENT : Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType(importing ? "*/*" : "application/zip");
+        if (!importing) {
+            intent.putExtra(Intent.EXTRA_TITLE, "sms-payment-backup-" + System.currentTimeMillis() + ".zip");
+        }
+        try {
+            pendingPaymentBackupResult = result;
+            activity.startActivityForResult(intent, importing
+                ? IMPORT_PAYMENT_BACKUP_REQUEST_CODE : EXPORT_PAYMENT_BACKUP_REQUEST_CODE);
+        } catch (Exception error) {
+            pendingPaymentBackupResult = null;
+            result.error("BACKUP_PICKER_FAILED", "Không mở được màn chọn tệp: " + error.getMessage(), null);
+        }
+    }
+
+    @Override
+    public boolean onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode != EXPORT_PAYMENT_BACKUP_REQUEST_CODE
+            && requestCode != IMPORT_PAYMENT_BACKUP_REQUEST_CODE) return false;
+        Result result = pendingPaymentBackupResult;
+        pendingPaymentBackupResult = null;
+        if (result == null) return true;
+        if (resultCode != Activity.RESULT_OK || data == null || data.getData() == null) {
+            result.success(null);
+            return true;
+        }
+        Uri uri = data.getData();
+        boolean importing = requestCode == IMPORT_PAYMENT_BACKUP_REQUEST_CODE;
+        backgroundExecutor.execute(() -> {
+            try {
+                Map<String, Object> summary = importing
+                    ? PaymentBackupManager.importBackup(context, uri)
+                    : PaymentBackupManager.exportBackup(context, uri);
+                mainHandler.post(() -> result.success(summary));
+            } catch (Exception error) {
+                Log.e("CallLogManager", "Payment backup failed", error);
+                mainHandler.post(() -> result.error("PAYMENT_BACKUP_FAILED", error.getMessage(), null));
+            }
+        });
+        return true;
     }
 
     private void savePaymentAccountSettings(MethodCall call, Result result) {

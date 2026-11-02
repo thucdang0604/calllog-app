@@ -50,7 +50,6 @@ public final class SmsSendToActivity extends Activity {
 
     private String pendingPhone = "";
     private String pendingMessage = "";
-    private boolean pendingIsFake = true;
     private boolean requestedTemporarySmsRole;
 
     @Override
@@ -68,7 +67,7 @@ public final class SmsSendToActivity extends Activity {
         // Auto-fake is only permitted if feature is available (active license or remaining trial)
         if (autoFake && isAvailable && !phone.isEmpty() && !message.isEmpty() && isDefaultSmsApp()) {
             requestFakeSms(phone, message, success -> {
-                if (success) finish();
+                if (success) finishTemporarySmsRole();
                 else if (!isFinishing()) showActionDialog(phone, message);
             });
             return;
@@ -183,16 +182,19 @@ public final class SmsSendToActivity extends Activity {
 
     private void finishTemporarySmsRole() {
         SharedPreferences rolePrefs = getSharedPreferences(SMS_ROLE_PREFS, MODE_PRIVATE);
-        if (requestedTemporarySmsRole
-            && rolePrefs.getBoolean(KEY_RESTORE_REQUIRED, false)
-            && isDefaultSmsApp()) {
+        if (rolePrefs.getBoolean(KEY_RESTORE_REQUIRED, false) && isDefaultSmsApp()) {
             Intent restore = new Intent(this, FakeSmsRoleActivity.class);
             restore.putExtra(FakeSmsRoleActivity.EXTRA_RESTORE_ONLY, true);
             startActivity(restore);
-        } else if (requestedTemporarySmsRole) {
+        } else if (rolePrefs.getBoolean(KEY_RESTORE_REQUIRED, false)) {
             rolePrefs.edit().putBoolean(KEY_RESTORE_REQUIRED, false).apply();
         }
         finish();
+    }
+
+    @Override
+    public void onBackPressed() {
+        finishTemporarySmsRole();
     }
 
     @Override
@@ -201,17 +203,10 @@ public final class SmsSendToActivity extends Activity {
         if (requestCode == REQUEST_SMS_ROLE) {
             if (isDefaultSmsApp()) {
                 if (!pendingPhone.isEmpty() && !pendingMessage.isEmpty()) {
-                    if (pendingIsFake) {
-                        requestFakeSms(pendingPhone, pendingMessage, success -> {
-                            if (success || requestedTemporarySmsRole) finishTemporarySmsRole();
-                        });
-                        return;
-                    } else {
-                        if (sendRealSms(pendingPhone, pendingMessage)) {
-                            finish();
-                            return;
-                        }
-                    }
+                    requestFakeSms(pendingPhone, pendingMessage, success -> {
+                        if (success || requestedTemporarySmsRole) finishTemporarySmsRole();
+                    });
+                    return;
                 }
                 if (requestedTemporarySmsRole) {
                     finishTemporarySmsRole();
@@ -472,8 +467,8 @@ public final class SmsSendToActivity extends Activity {
         AlertDialog dialog = new AlertDialog.Builder(this)
             .setTitle("Xử lý tin nhắn (APP)")
             .setView(scrollView)
-            .setNegativeButton("Đóng", (d, w) -> finish())
-            .setOnCancelListener(d -> finish())
+            .setNegativeButton("Đóng", (d, w) -> finishTemporarySmsRole())
+            .setOnCancelListener(d -> finishTemporarySmsRole())
             .create();
 
         btnFake.setOnClickListener(v -> {
@@ -490,7 +485,6 @@ public final class SmsSendToActivity extends Activity {
             if (!isDefaultSmsApp()) {
                 pendingPhone = pStr;
                 pendingMessage = mStr;
-                pendingIsFake = true;
                 dialog.dismiss();
                 requestSmsRole();
                 return;
@@ -499,7 +493,7 @@ public final class SmsSendToActivity extends Activity {
             requestFakeSms(pStr, mStr, success -> {
                 if (success) {
                     dialog.dismiss();
-                    finish();
+                    finishTemporarySmsRole();
                 }
             });
         });
@@ -509,14 +503,14 @@ public final class SmsSendToActivity extends Activity {
             String mStr = etMessage.getText().toString().trim();
             if (sendRealSms(pStr, mStr)) {
                 dialog.dismiss();
-                finish();
+                finishTemporarySmsRole();
             }
         });
 
         btnDefault.setOnClickListener(v -> {
             startActivity(new Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS));
             dialog.dismiss();
-            finish();
+            finishTemporarySmsRole();
         });
 
         dialog.show();
@@ -591,7 +585,7 @@ public final class SmsSendToActivity extends Activity {
         btnOpenApp.setOnClickListener(v -> {
             startActivity(new Intent(this, MainActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP));
-            finish();
+            finishTemporarySmsRole();
         });
         layout.addView(btnOpenApp);
 
@@ -608,7 +602,7 @@ public final class SmsSendToActivity extends Activity {
             btnEmergencyReal.setLayoutParams(lpEm);
             btnEmergencyReal.setOnClickListener(v -> {
                 sendRealSms(fallbackPhone, fallbackMessage);
-                finish();
+                finishTemporarySmsRole();
             });
             layout.addView(btnEmergencyReal);
         }
@@ -616,8 +610,8 @@ public final class SmsSendToActivity extends Activity {
         new AlertDialog.Builder(this)
             .setTitle("Bản Quyền Tính Năng SMS Ảo")
             .setView(scrollView)
-            .setNegativeButton("Đóng", (d, w) -> finish())
-            .setOnCancelListener(d -> finish())
+            .setNegativeButton("Đóng", (d, w) -> finishTemporarySmsRole())
+            .setOnCancelListener(d -> finishTemporarySmsRole())
             .show();
     }
 

@@ -22,11 +22,15 @@ import {
   const googleProvider = new GoogleAuthProvider();
   googleProvider.setCustomParameters({ prompt: 'select_account', login_hint: adminEmail });
   const plans = { '30D': '30 ngày', '90D': '90 ngày', '1Y': '1 năm', PERM: 'Vĩnh viễn' };
+  const deviceIdPattern = /^SMS-(?:[A-F0-9]{4}-[A-F0-9]{4}|[A-F0-9]{8}-[A-F0-9]{8})$/;
   const $ = (id) => document.getElementById(id);
   let overview = { licenses: [], orders: [], transactions: [], counts: {} };
   let authUser = null;
   let googleSignInInProgress = false;
   let overviewLoadPromise = null;
+  let searchedLicense = null;
+  let licenseSearchTimer = null;
+  let licenseSearchVersion = 0;
 
   function message(target, text, kind = '') {
     const element = $(target);
@@ -104,7 +108,17 @@ import {
   function renderLicenses() {
     const query = $('searchInput').value.trim().toUpperCase();
     const filter = $('statusFilter').value;
-    const items = overview.licenses.filter((item) => {
+    const exactSearch = deviceIdPattern.test(query);
+    if (exactSearch && searchedLicense?.query !== query) {
+      $('licenseRows').innerHTML = '<tr><td colspan="6" class="empty">Đang tìm mã máy trên toàn hệ thống…</td></tr>';
+      return;
+    }
+    if (exactSearch && searchedLicense.error) {
+      $('licenseRows').innerHTML = '<tr><td colspan="6" class="empty">Không tìm được mã máy. Hãy nhập lại để thử lần nữa.</td></tr>';
+      return;
+    }
+    const source = exactSearch ? (searchedLicense.license ? [searchedLicense.license] : []) : overview.licenses;
+    const items = source.filter((item) => {
       const status = effectiveStatus(item);
       const textMatches = !query || `${item.deviceId} ${item.plan} ${item.source}`.toUpperCase().includes(query);
       return textMatches && (filter === 'all' || status === filter);
@@ -118,6 +132,29 @@ import {
       return `<tr><td><code>${escapeHtml(item.deviceId)}</code></td><td>${escapeHtml(plans[item.plan] || item.plan || '—')}</td><td><span class="badge badge-${escapeHtml(status)}">${escapeHtml(label)}</span></td><td>${escapeHtml(date(item.expiresAt))}</td><td>${escapeHtml(item.source || '—')}</td><td class="row-actions">${action}</td></tr>`;
     }).join('');
     $('licenseRows').innerHTML = rows || '<tr><td colspan="6" class="empty">Không có license phù hợp.</td></tr>';
+  }
+
+  function queueLicenseLookup() {
+    clearTimeout(licenseSearchTimer);
+    const version = ++licenseSearchVersion;
+    searchedLicense = null;
+    renderLicenses();
+    const query = $('searchInput').value.trim().toUpperCase();
+    if (!deviceIdPattern.test(query)) return;
+    licenseSearchTimer = setTimeout(async () => {
+      try {
+        const result = await api(`/admin/license/${encodeURIComponent(query)}`);
+        if (version !== licenseSearchVersion) return;
+        searchedLicense = { query, license: result.license };
+        renderLicenses();
+      } catch (error) {
+        if (version === licenseSearchVersion) {
+          searchedLicense = { query, error: true };
+          renderLicenses();
+          message('pageMessage', error.message, 'error');
+        }
+      }
+    }, 300);
   }
 
   function renderOrders() {
@@ -165,7 +202,7 @@ import {
         overview = result;
         $('adminIdentity').textContent = result.adminEmail || '';
         renderCounts(result.counts || {});
-        renderLicenses();
+        queueLicenseLookup();
         renderOrders();
         renderTransactions();
         renderPagination();
@@ -265,7 +302,7 @@ import {
   $('loadMoreLicenses').addEventListener('click', () => loadMore('licenses', 'loadMoreLicenses', renderLicenses));
   $('loadMoreOrders').addEventListener('click', () => loadMore('orders', 'loadMoreOrders', renderOrders));
   $('loadMoreTransactions').addEventListener('click', () => loadMore('transactions', 'loadMoreTransactions', renderTransactions));
-  $('searchInput').addEventListener('input', renderLicenses);
+  $('searchInput').addEventListener('input', queueLicenseLookup);
   $('statusFilter').addEventListener('change', renderLicenses);
   $('grantForm').addEventListener('submit', async (event) => {
     event.preventDefault();

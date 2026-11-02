@@ -3,16 +3,8 @@ const { FieldValue } = require('@google-cloud/firestore');
 async function syncTrialUsage({ db, deviceId, reportedUsed = 0 }) {
   const usageRef = db.collection('trialUsage').doc(deviceId);
   const claimed = Math.max(0, Math.min(10, Math.trunc(Number(reportedUsed) || 0)));
-  return db.runTransaction(async (transaction) => {
-    const snapshot = await transaction.get(usageRef);
-    if (snapshot.exists) return Math.max(0, Number(snapshot.get('used') || 0));
-    transaction.create(usageRef, {
-      deviceId,
-      used: claimed,
-      updatedAt: FieldValue.serverTimestamp(),
-    });
-    return claimed;
-  });
+  const snapshot = await usageRef.get();
+  return snapshot.exists ? Math.max(0, Number(snapshot.get('used') || 0)) : claimed;
 }
 
 async function consumeTrialUsage({ db, deviceId, requestId, maxTrialCount, reportedUsed = 0, now = Date.now() }) {

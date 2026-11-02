@@ -16,6 +16,11 @@ function pendingOrderPointerId(deviceId, planId) {
   return crypto.createHash('sha256').update(`${deviceId}:${planId}`).digest('hex');
 }
 
+function hasActivePermanentLicense(license, now = Date.now()) {
+  return license?.status === 'active' && license.plan === 'PERM' &&
+    (license.expiresAt == null || timestampMillis(license.expiresAt) > now);
+}
+
 async function createOrReusePendingOrder({
   db,
   deviceId,
@@ -28,7 +33,13 @@ async function createOrReusePendingOrder({
     pendingOrderPointerId(deviceId, planId),
   );
   return db.runTransaction(async (transaction) => {
-    const pointer = await transaction.get(pointerRef);
+    const [license, pointer] = await Promise.all([
+      transaction.get(db.collection('licenses').doc(deviceId)),
+      transaction.get(pointerRef),
+    ]);
+    if (license.exists && hasActivePermanentLicense(license.data())) {
+      return { blocked: 'permanent-license' };
+    }
     const previousCode = String(pointer.exists ? pointer.get('paymentCode') || '' : '');
     if (isValidPaymentCode(previousCode)) {
       const previousOrder = await transaction.get(db.collection('orders').doc(previousCode));
@@ -65,4 +76,4 @@ async function createOrReusePendingOrder({
   });
 }
 
-module.exports = { createOrReusePendingOrder, isValidPaymentCode, timestampMillis };
+module.exports = { createOrReusePendingOrder, hasActivePermanentLicense, isValidPaymentCode, timestampMillis };

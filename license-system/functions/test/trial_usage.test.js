@@ -2,7 +2,7 @@ const crypto = require('node:crypto');
 const assert = require('node:assert/strict');
 const { after, test } = require('node:test');
 const { Firestore } = require('@google-cloud/firestore');
-const { consumeTrialUsage } = require('../trial_usage');
+const { consumeTrialUsage, syncTrialUsage } = require('../trial_usage');
 
 const db = new Firestore({
   projectId: process.env.GCLOUD_PROJECT || 'demo-nvpttt',
@@ -10,6 +10,21 @@ const db = new Firestore({
 });
 
 after(() => db.terminate());
+
+test('first sync does not create a trial document', async () => {
+  assert.ok(process.env.FIRESTORE_EMULATOR_HOST, 'Run this test with the Firestore emulator.');
+  const suffix = crypto.randomBytes(4).toString('hex').toUpperCase();
+  const deviceId = `SMS-${suffix.slice(0, 4)}-${suffix.slice(4)}`;
+  const usageRef = db.collection('trialUsage').doc(deviceId);
+  assert.equal(await syncTrialUsage({ db, deviceId, reportedUsed: 3 }), 3);
+  assert.equal((await usageRef.get()).exists, false);
+  await usageRef.set({ deviceId, used: 4 });
+  try {
+    assert.equal(await syncTrialUsage({ db, deviceId, reportedUsed: 1 }), 4);
+  } finally {
+    await usageRef.delete();
+  }
+});
 
 test('trial consumption is capped, idempotent, and ignores paid licenses', async () => {
   assert.ok(process.env.FIRESTORE_EMULATOR_HOST, 'Run this test with the Firestore emulator.');

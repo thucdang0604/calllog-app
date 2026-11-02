@@ -6,7 +6,7 @@
   },
   "main": "index.js",
   "scripts": {
-    "lint": "node --check index.js && node --check pending_orders.js && node --check rate_limiter.js && node --check trial_usage.js",
+    "lint": "node --check index.js && node --check admin_queries.js && node --check license_orders.js && node --check pending_orders.js && node --check rate_limiter.js && node --check trial_usage.js && node --check ../public/admin.js",
     "test": "node --test"
   },
   "dependencies": {

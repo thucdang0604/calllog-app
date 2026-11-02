@@ -80,11 +80,6 @@ class CallLogProvider with ChangeNotifier {
     return _allCallLogs.take(count).toList();
   }
 
-  /// Lấy 2 cuộc gọi mới nhất (giữ để tương thích)
-  List<CallLogEntry> getLatestTwoCalls() {
-    return _allCallLogs.take(2).toList();
-  }
-
   /// Làm mới dữ liệu
   Future<void> refresh() async {
     await loadCallLogs(forceRefresh: true);

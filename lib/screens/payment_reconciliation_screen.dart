@@ -52,6 +52,7 @@ class _PaymentReconciliationScreenState
   String _channelFilter = 'all';
   StreamSubscription<dynamic>? _paymentEventsSubscription;
   bool _isLoading = true;
+  bool _backupBusy = false;
   String? _error;
 
   List<_PaymentRecord> get _trackableRecords => _records
@@ -285,6 +286,50 @@ class _PaymentReconciliationScreenState
     }
   }
 
+  Future<void> _handleBackup(bool importing) async {
+    if (_backupBusy) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(importing ? 'Khôi phục lịch sử đối soát?' : 'Xuất bản sao đối soát?'),
+        content: Text(importing
+            ? 'Chỉ thêm các khoản chưa có trong app; không ghi đè dữ liệu hiện tại. Chọn bản sao do app này tạo.'
+            : 'Bản sao chứa số điện thoại, nội dung và ảnh đối soát, không được mã hóa. Hãy lưu ở nơi riêng tư.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(dialogContext).pop(false), child: const Text('Hủy')),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(importing ? 'Chọn bản sao' : 'Chọn nơi lưu'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _backupBusy = true);
+    try {
+      final summary = await _channel.invokeMapMethod<String, dynamic>(
+        importing ? 'importPaymentBackup' : 'exportPaymentBackup',
+      );
+      if (summary == null) return;
+      if (importing) await _loadRecords(showLoading: false);
+      if (!mounted) return;
+      final count = summary['records'] as int? ?? 0;
+      final extra = importing
+          ? ' · bỏ qua ${summary['skipped'] ?? 0} khoản đã có'
+          : ' · ${summary['images'] ?? 0} ảnh${(summary['missingImages'] as int? ?? 0) > 0 ? ' · thiếu ${summary['missingImages']} ảnh cũ' : ''}';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(importing ? 'Đã khôi phục $count khoản$extra.' : 'Đã sao lưu $count khoản$extra.'),
+      ));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(importing ? 'Không khôi phục được: $error' : 'Không sao lưu được: $error'),
+      ));
+    } finally {
+      if (mounted) setState(() => _backupBusy = false);
+    }
+  }
+
   String _formatTime(int timestamp) {
     return _formatPaymentTime(timestamp);
   }
@@ -310,6 +355,16 @@ class _PaymentReconciliationScreenState
       appBar: AppBar(
         title: const Text('Đối soát chuyển khoản'),
         actions: [
+          PopupMenuButton<String>(
+            enabled: !_backupBusy,
+            tooltip: 'Sao lưu và khôi phục',
+            icon: const Icon(Icons.backup_outlined),
+            onSelected: (action) => _handleBackup(action == 'import'),
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'export', child: Text('Xuất bản sao đối soát')),
+              PopupMenuItem(value: 'import', child: Text('Khôi phục từ bản sao')),
+            ],
+          ),
           IconButton(
             onPressed: () => Navigator.of(context).push<bool>(
               MaterialPageRoute<bool>(

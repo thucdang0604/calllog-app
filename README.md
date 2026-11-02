@@ -35,3 +35,5 @@ APK được tạo tại `build/app/outputs/flutter-apk/app-release.apk`.
 3. App sẽ phát hiện bản mới khi người dùng mở app.
 
 APK release tiếp tục dùng khóa cũ tại `~/.android/debug.keystore` để Android cho phép cài đè lên bản đã phát hành. Nếu tệp khóa này không có, build release sẽ lỗi thay vì tự ký bằng khóa khác. Có thể cấu hình khóa khác bằng Gradle properties `CALLLOG_RELEASE_KEYSTORE`, `CALLLOG_RELEASE_STORE_PASSWORD`, `CALLLOG_RELEASE_KEY_ALIAS` và `CALLLOG_RELEASE_KEY_PASSWORD`; đổi khóa sẽ khiến Android từ chối cài đè nếu chưa có quy trình chuyển khóa. Không đưa keystore vào Git.
+
+Các sửa sau audit và cách sao lưu/kiểm tra trên thiết bị: [audit-fixes-2026-11-01.md](docs/audit-fixes-2026-11-01.md), [backup-and-device-checks.md](docs/backup-and-device-checks.md).

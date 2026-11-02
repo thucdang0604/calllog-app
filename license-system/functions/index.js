@@ -1,7 +1,7 @@
 const crypto = require('node:crypto');
 const express = require('express');
 const admin = require('firebase-admin');
-const { Firestore, FieldPath, FieldValue } = require('@google-cloud/firestore');
+const { Firestore, FieldValue } = require('@google-cloud/firestore');
 const { defineSecret, defineString } = require('firebase-functions/params');
 const { onRequest } = require('firebase-functions/v2/https');
 const {
@@ -9,7 +9,9 @@ const {
   isValidPaymentCode,
   timestampMillis,
 } = require('./pending_orders');
-const { createKeyedRateLimiter } = require('./rate_limiter');
+const { PLANS, approvePendingOrder, makeLicenseRecord, planDetails } = require('./license_orders');
+const { readAdminPage: queryAdminPage, listPendingTelegramOrders: queryPendingTelegramOrders } = require('./admin_queries');
+const { createInstanceRateLimiter, createKeyedRateLimiter, trustedClientIp } = require('./rate_limiter');
 const { consumeTrialUsage, syncTrialUsage } = require('./trial_usage');
 
 admin.initializeApp();
@@ -28,13 +30,6 @@ const BANK_ACCOUNT_NAME = defineString('BANK_ACCOUNT_NAME', { default: 'DANG TRI
 
 const ADMIN_EMAIL = 'thucdang2205@gmail.com';
 const OFFLINE_GRACE_MS = 24 * 60 * 60 * 1000;
-const PLANS = Object.freeze({
-  '30D': { title: '30 ngày', amount: 50000, days: 30 },
-  '90D': { title: '90 ngày', amount: 140000, days: 90 },
-  '1Y': { title: '1 năm', amount: 365000, days: 365 },
-  PERM: { title: 'Vĩnh viễn', amount: 999999, days: null },
-});
-
 const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '64kb' }));
@@ -42,33 +37,15 @@ const telegramApp = express();
 telegramApp.disable('x-powered-by');
 telegramApp.use(express.json({ limit: '64kb' }));
 
-function createInstanceRateLimiter(maxRequests, windowMs = 60_000) {
-  let windowStartedAt = 0;
-  let requestCount = 0;
-  return (_req, res, next) => {
-    const now = Date.now();
-    if (now - windowStartedAt >= windowMs) {
-      windowStartedAt = now;
-      requestCount = 0;
-    }
-    if (requestCount >= maxRequests) {
-      res.set('Retry-After', String(Math.max(1, Math.ceil((windowStartedAt + windowMs - now) / 1000))));
-      return sendError(res, 429, 'Máy chủ đang nhận quá nhiều yêu cầu. Hãy thử lại sau.');
-    }
-    requestCount += 1;
-    return next();
-  };
-}
-
-// shortcut: X-Forwarded-For can be client-supplied, so this only limits bursts; use App Check when compatible clients are available.
 app.use(createKeyedRateLimiter(
   120,
   60_000,
-  (req) => String(req.get('X-Forwarded-For') || '').split(',')[0].trim(),
+  trustedClientIp,
 ));
-// Keep the shared cap as an emergency cost guard; normal clients are limited per IP and device.
+// shortcut: per-instance limits reset on cold starts; add edge protection if abuse exceeds this cap.
 app.use(createInstanceRateLimiter(1200));
 telegramApp.use(createInstanceRateLimiter(60));
+const anonymousWriteRateLimiter = createInstanceRateLimiter(30, 10 * 60_000);
 const adminOverviewRateLimiter = createKeyedRateLimiter(
   12,
   60_000,
@@ -77,20 +54,8 @@ const adminOverviewRateLimiter = createKeyedRateLimiter(
 const ADMIN_PAGE_SIZE = 100;
 
 async function readAdminPage(collectionName, cursorId = '') {
-  const collection = db.collection(collectionName);
-  let query = collection.orderBy(FieldPath.documentId(), 'desc');
-  if (cursorId) {
-    const cursor = await collection.doc(cursorId).get();
-    if (!cursor.exists) throw new Error('Trang dữ liệu không còn tồn tại. Hãy làm mới.');
-    query = query.startAfter(cursor);
-  }
-  const snapshot = await query.limit(ADMIN_PAGE_SIZE + 1).get();
-  const docs = snapshot.docs.slice(0, ADMIN_PAGE_SIZE);
-  return {
-    items: docs.map(serializeDoc),
-    hasMore: snapshot.docs.length > ADMIN_PAGE_SIZE,
-    cursor: docs.length ? docs[docs.length - 1].id : null,
-  };
+  const page = await queryAdminPage(db, collectionName, cursorId, ADMIN_PAGE_SIZE);
+  return { items: page.docs.map(serializeDoc), hasMore: page.hasMore, cursor: page.cursor };
 }
 
 function adminRequestAllowed(req, res) {
@@ -109,14 +74,6 @@ function normalizeDeviceId(value) {
 
 function isValidDeviceId(value) {
   return /^SMS-(?:[A-F0-9]{4}-[A-F0-9]{4}|[A-F0-9]{8}-[A-F0-9]{8})$/.test(value);
-}
-
-function normalizeAccountNumber(value) {
-  return String(value || '').replace(/\D/g, '');
-}
-
-function planDetails(planId) {
-  return Object.prototype.hasOwnProperty.call(PLANS, planId) ? PLANS[planId] : null;
 }
 
 function buildQrUrl(paymentCode, amount) {
@@ -156,32 +113,6 @@ function signEntitlement(license, deviceId, trialUsed = 0) {
   return `${encodedPayload}.${signature.toString('base64url')}`;
 }
 
-function nextExpiry(existing, planId, now = Date.now()) {
-  if (planId === 'PERM' || existing?.plan === 'PERM' && existing?.status === 'active') {
-    return null;
-  }
-  const plan = planDetails(planId);
-  const previousExpiry = existing?.status === 'active' ? existing.expiresAt : null;
-  const start = previousExpiry && previousExpiry > now ? previousExpiry : now;
-  return start + plan.days * 24 * 60 * 60 * 1000;
-}
-
-function makeLicenseRecord(deviceId, planId, existing, source, transactionId = null) {
-  const now = Date.now();
-  const effectivePlan = existing?.plan === 'PERM' && existing?.status === 'active' ? 'PERM' : planId;
-  return {
-    deviceId,
-    plan: effectivePlan,
-    status: 'active',
-    startedAt: existing?.status === 'active' && existing.startedAt ? existing.startedAt : now,
-    expiresAt: nextExpiry(existing, effectivePlan, now),
-    source,
-    lastTransactionId: transactionId,
-    createdAt: existing?.createdAt || FieldValue.serverTimestamp(),
-    updatedAt: FieldValue.serverTimestamp(),
-  };
-}
-
 function serializeDoc(snapshot) {
   const data = snapshot.data();
   return {
@@ -217,7 +148,7 @@ async function requireAdmin(req, res) {
   }
 }
 
-app.post('/api/orders', createKeyedRateLimiter(
+app.post('/api/orders', anonymousWriteRateLimiter, createKeyedRateLimiter(
   6,
   60_000,
   (req) => normalizeDeviceId(req.body?.deviceId),
@@ -232,7 +163,7 @@ app.post('/api/orders', createKeyedRateLimiter(
   try {
     const accountNumber = BANK_ACCOUNT_NUMBER.value().trim();
     const accountName = BANK_ACCOUNT_NAME.value().trim();
-    const { record, reused } = await createOrReusePendingOrder({
+    const { record, reused, blocked } = await createOrReusePendingOrder({
       db,
       deviceId,
       planId,
@@ -240,6 +171,9 @@ app.post('/api/orders', createKeyedRateLimiter(
       accountNumber,
       accountName,
     });
+    if (blocked === 'permanent-license') {
+      return sendError(res, 409, 'Thiết bị đã có bản quyền vĩnh viễn; không cần chuyển khoản thêm.');
+    }
     const { paymentCode } = record;
     return res.json({
       success: true,
@@ -340,7 +274,7 @@ app.post('/api/license/sync', createKeyedRateLimiter(
   }
 });
 
-app.post('/api/trial/consume', createKeyedRateLimiter(
+app.post('/api/trial/consume', anonymousWriteRateLimiter, createKeyedRateLimiter(
   12,
   60_000,
   (req) => normalizeDeviceId(req.body?.deviceId),
@@ -374,98 +308,6 @@ app.post('/api/trial/consume', createKeyedRateLimiter(
     return sendError(res, 500, 'Chưa ghi nhận được lượt trải nghiệm. Hãy thử lại.');
   }
 });
-
-async function approvePendingOrder(paymentCode, approvedBy, approvalMethod = 'dashboard') {
-  if (!isValidPaymentCode(paymentCode)) {
-    return { error: { status: 400, message: 'Mã đơn thanh toán không hợp lệ.' } };
-  }
-
-  const orderRef = db.collection('orders').doc(paymentCode);
-  const manualTransactionId = `manual-${paymentCode}`;
-  const transactionRef = db.collection('transactions').doc(manualTransactionId);
-  const auditRef = db.collection('auditLogs').doc();
-
-  return db.runTransaction(async (transaction) => {
-    const [orderSnapshot, transactionSnapshot] = await Promise.all([
-      transaction.get(orderRef),
-      transaction.get(transactionRef),
-    ]);
-    if (!orderSnapshot.exists) {
-      return { error: { status: 404, message: 'Không tìm thấy đơn thanh toán.' } };
-    }
-
-    const order = orderSnapshot.data();
-    if (order.status === 'paid') {
-      return {
-        alreadyPaid: true,
-        deviceId: order.deviceId,
-        plan: order.plan,
-        amount: order.amount,
-        telegramChatId: String(order.telegramChatId || ''),
-      };
-    }
-    if (order.status !== 'pending') {
-      return { error: { status: 409, message: 'Đơn này không còn ở trạng thái chờ duyệt.' } };
-    }
-    if (transactionSnapshot.exists) {
-      return { error: { status: 409, message: 'Đơn đã có giao dịch ghi nhận, hãy tải lại dữ liệu.' } };
-    }
-
-    const licenseRef = db.collection('licenses').doc(order.deviceId);
-    const licenseSnapshot = await transaction.get(licenseRef);
-    const existingLicense = licenseSnapshot.exists ? licenseSnapshot.data() : null;
-    const licenseRecord = makeLicenseRecord(
-      order.deviceId,
-      order.plan,
-      existingLicense,
-      'manual-payment',
-      manualTransactionId,
-    );
-
-    transaction.update(orderRef, {
-      status: 'paid',
-      paidAt: FieldValue.serverTimestamp(),
-      approvedAt: FieldValue.serverTimestamp(),
-      approvedBy,
-      approvalMethod,
-      updatedAt: FieldValue.serverTimestamp(),
-    });
-    transaction.set(licenseRef, licenseRecord);
-    transaction.create(transactionRef, {
-      provider: 'manual',
-      providerTransactionId: manualTransactionId,
-      paymentCode,
-      deviceId: order.deviceId,
-      plan: order.plan,
-      accountNumber: normalizeAccountNumber(order.accountNumber),
-      transferType: 'in',
-      transferAmount: order.amount,
-      content: paymentCode,
-      status: 'matched',
-      approvedBy,
-      approvalMethod,
-      receivedAt: FieldValue.serverTimestamp(),
-    });
-    transaction.create(auditRef, {
-      adminEmail: approvedBy,
-      action: 'approve-payment',
-      approvalMethod,
-      paymentCode,
-      deviceId: order.deviceId,
-      plan: order.plan,
-      amount: order.amount,
-      createdAt: FieldValue.serverTimestamp(),
-    });
-    return {
-      alreadyPaid: false,
-      deviceId: order.deviceId,
-      plan: order.plan,
-      amount: order.amount,
-      license: licenseRecord,
-      telegramChatId: String(order.telegramChatId || ''),
-    };
-  });
-}
 
 async function callTelegram(method, payload) {
   const token = TELEGRAM_BOT_TOKEN.value().trim();
@@ -544,14 +386,6 @@ async function sendTelegramActivationNotice(paymentCode, chatId) {
   return { deviceId: order.deviceId };
 }
 
-async function listPendingTelegramOrders() {
-  const snapshot = await db.collection('orders').orderBy('createdAt', 'desc').limit(100).get();
-  return snapshot.docs
-    .map((doc) => ({ paymentCode: doc.id, ...doc.data() }))
-    .filter((order) => order.status === 'pending')
-    .slice(0, 20);
-}
-
 async function handleTelegramUpdate(update) {
   const message = update?.message;
   if (!message?.chat || message.chat.type !== 'private') return;
@@ -572,7 +406,7 @@ async function handleTelegramUpdate(update) {
   const commandArgument = String(command?.[2] || '').toUpperCase();
 
   if (isAdmin && commandName === 'choxacnhan') {
-    const orders = await listPendingTelegramOrders();
+    const orders = await queryPendingTelegramOrders(db);
     const rows = orders.map((order) =>
       `${order.telegramChatId ? '📨' : '—'} ${order.paymentCode}\n${order.deviceId} · ${order.planTitle || order.plan} · ${Number(order.amount || 0).toLocaleString('vi-VN')}đ`,
     );
@@ -596,7 +430,7 @@ async function handleTelegramUpdate(update) {
       return;
     }
     const customerChatId = String(orderSnapshot.get('telegramChatId') || '');
-    const result = await approvePendingOrder(commandArgument, `telegram:${userId}`, 'telegram');
+    const result = await approvePendingOrder(db, commandArgument, `telegram:${userId}`, 'telegram');
     if (result.error) {
       await sendTelegramMessage(chatId, result.error.message);
       return;
@@ -793,13 +627,28 @@ app.get('/api/admin/page/:collection', async (req, res) => {
   }
 });
 
+app.get('/api/admin/license/:deviceId', async (req, res) => {
+  const adminEmail = await requireAdmin(req, res);
+  if (!adminEmail) return;
+  if (!adminRequestAllowed(req, res)) return;
+  const deviceId = normalizeDeviceId(req.params.deviceId);
+  if (!isValidDeviceId(deviceId)) return sendError(res, 400, 'Mã thiết bị không hợp lệ.');
+  try {
+    const snapshot = await db.collection('licenses').doc(deviceId).get();
+    return res.json({ success: true, license: snapshot.exists ? serializeDoc(snapshot) : null });
+  } catch (error) {
+    console.error('Could not find admin license', error);
+    return sendError(res, 500, 'Không tìm được license. Hãy thử lại.');
+  }
+});
+
 app.post('/api/admin/approve-order', async (req, res) => {
   const adminEmail = await requireAdmin(req, res);
   if (!adminEmail) return;
 
   const paymentCode = String(req.body?.paymentCode || '').trim().toUpperCase();
   try {
-    const result = await approvePendingOrder(paymentCode, adminEmail, 'dashboard');
+    const result = await approvePendingOrder(db, paymentCode, adminEmail, 'dashboard');
     if (result.error) return sendError(res, result.error.status, result.error.message);
     if (!result.alreadyPaid && result.telegramChatId) {
       try {
