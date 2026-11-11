@@ -41,7 +41,8 @@ class PaymentReconciliationScreen extends StatefulWidget {
 }
 
 class _PaymentReconciliationScreenState
-    extends State<PaymentReconciliationScreen> {
+    extends State<PaymentReconciliationScreen>
+    with SingleTickerProviderStateMixin {
   static const MethodChannel _channel = MethodChannel('call_log_manager');
   static const EventChannel _paymentEvents = EventChannel(
     'call_log_manager/payment_tracking_events',
@@ -49,6 +50,7 @@ class _PaymentReconciliationScreenState
 
   List<_PaymentRecord> _records = [];
   final _searchController = TextEditingController();
+  late TabController _tabController;
   String _channelFilter = 'all';
   StreamSubscription<dynamic>? _paymentEventsSubscription;
   bool _isLoading = true;
@@ -97,6 +99,7 @@ class _PaymentReconciliationScreenState
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 3, vsync: this);
     _loadRecords();
     _paymentEventsSubscription = _paymentEvents.receiveBroadcastStream().listen(
       (_) => _loadRecords(showLoading: false),
@@ -108,6 +111,7 @@ class _PaymentReconciliationScreenState
   void dispose() {
     _paymentEventsSubscription?.cancel();
     _searchController.dispose();
+    _tabController.dispose();
     super.dispose();
   }
 
@@ -379,15 +383,15 @@ class _PaymentReconciliationScreenState
     final pendingRecords = _pending;
     final receivedRecords = _received;
     final doneRecords = _done;
-    final pendingTotal = _pending.fold<int>(
+    final pendingTotal = pendingRecords.fold<int>(
       0,
       (total, record) => total + record.amountValue,
     );
-    final receivedTotal = _received.fold<int>(
+    final receivedTotal = receivedRecords.fold<int>(
       0,
       (total, record) => total + record.amountValue,
     );
-    final doneTotal = _done.fold<int>(
+    final doneTotal = doneRecords.fold<int>(
       0,
       (total, record) => total + record.amountValue,
     );
@@ -446,178 +450,322 @@ class _PaymentReconciliationScreenState
                 ),
               ),
             )
-          : RefreshIndicator(
-              onRefresh: _loadRecords,
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          : Column(
+              children: [
+                // Top control bar: Summary + Search + Filters
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _buildSummaryCard(pendingTotal, receivedTotal, doneTotal),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: _searchController,
+                        decoration: InputDecoration(
+                          prefixIcon: const Icon(Icons.search, size: 20),
+                          hintText: 'Tìm SĐT, mã đơn, số tiền, nội dung',
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 8,
+                          ),
+                          suffixIcon: _searchController.text.isEmpty
+                              ? null
+                              : IconButton(
+                                  iconSize: 18,
+                                  onPressed: () => setState(
+                                    _searchController.clear,
+                                  ),
+                                  icon: const Icon(Icons.clear),
+                                ),
+                          border: const OutlineInputBorder(),
+                        ),
+                        onChanged: (_) => setState(() {}),
+                      ),
+                      const SizedBox(height: 6),
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: [
+                            ChoiceChip(
+                              visualDensity: VisualDensity.compact,
+                              label: const Text(
+                                'Tất cả kênh',
+                                style: TextStyle(fontSize: 12),
+                              ),
+                              selected: _channelFilter == 'all',
+                              onSelected: (_) =>
+                                  setState(() => _channelFilter = 'all'),
+                            ),
+                            const SizedBox(width: 6),
+                            ChoiceChip(
+                              visualDensity: VisualDensity.compact,
+                              avatar: const Icon(Icons.sms_outlined, size: 14),
+                              label: const Text(
+                                'SMS',
+                                style: TextStyle(fontSize: 12),
+                              ),
+                              selected: _channelFilter == 'sms',
+                              onSelected: (_) =>
+                                  setState(() => _channelFilter = 'sms'),
+                            ),
+                            const SizedBox(width: 6),
+                            ChoiceChip(
+                              visualDensity: VisualDensity.compact,
+                              avatar: const Icon(Icons.chat_bubble_outline, size: 14),
+                              label: const Text(
+                                'Zalo',
+                                style: TextStyle(fontSize: 12),
+                              ),
+                              selected: _channelFilter == 'zalo',
+                              onSelected: (_) =>
+                                  setState(() => _channelFilter = 'zalo'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // TabBar
+                Material(
+                  color: Theme.of(context).colorScheme.surface,
+                  elevation: 1,
+                  child: TabBar(
+                    controller: _tabController,
+                    labelColor: Theme.of(context).colorScheme.primary,
+                    unselectedLabelColor: Colors.grey.shade600,
+                    indicatorColor: Theme.of(context).colorScheme.primary,
+                    indicatorWeight: 3,
+                    tabs: [
+                      Tab(
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Text(
+                              'Chờ chuyển',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            if (pendingRecords.isNotEmpty) ...[
+                              const SizedBox(width: 4),
+                              _buildBadge(
+                                pendingRecords.length,
+                                Colors.orange.shade800,
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      Tab(
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Text(
+                              'Đã nhận',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            if (receivedRecords.isNotEmpty) ...[
+                              const SizedBox(width: 4),
+                              _buildBadge(
+                                receivedRecords.length,
+                                Colors.blue.shade700,
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      Tab(
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Text(
+                              'Đã xong',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            if (doneRecords.isNotEmpty) ...[
+                              const SizedBox(width: 4),
+                              _buildBadge(
+                                doneRecords.length,
+                                Colors.green.shade700,
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // TabBarView
+                Expanded(
+                  child: TabBarView(
+                    controller: _tabController,
+                    children: [
+                      _buildPendingTab(pendingRecords),
+                      _buildReceivedTab(receivedRecords),
+                      _buildDoneTab(doneRecords),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+    );
+  }
+
+  Widget _buildBadge(int count, Color color) {
+    if (count <= 0) return const SizedBox.shrink();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        count > 99 ? '99+' : '$count',
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 10,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSummaryCard(int pendingTotal, int receivedTotal, int doneTotal) {
+    final repliedPendingCount = _pending
+        .where((record) => record.customerReplied)
+        .length;
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.grey.shade300),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: _buildSummaryItem(
+                  label: 'Chờ chuyển',
+                  count: _pending.length,
+                  total: pendingTotal,
+                  color: Colors.orange.shade800,
+                  onTap: () => _tabController.animateTo(0),
+                ),
+              ),
+              Container(width: 1, height: 36, color: Colors.grey.shade300),
+              Expanded(
+                child: _buildSummaryItem(
+                  label: 'Đã nhận',
+                  count: _received.length,
+                  total: receivedTotal,
+                  color: Colors.blue.shade700,
+                  onTap: () => _tabController.animateTo(1),
+                ),
+              ),
+              Container(width: 1, height: 36, color: Colors.grey.shade300),
+              Expanded(
+                child: _buildSummaryItem(
+                  label: 'Đã xong',
+                  count: _done.length,
+                  total: doneTotal,
+                  color: Colors.green.shade700,
+                  onTap: () => _tabController.animateTo(2),
+                ),
+              ),
+            ],
+          ),
+          if (repliedPendingCount > 0) ...[
+            const SizedBox(height: 6),
+            InkWell(
+              onTap: () => _tabController.animateTo(0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  _buildSummary(pendingTotal, receivedTotal, doneTotal),
-                  const SizedBox(height: 16),
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: TextField(
-                      controller: _searchController,
-                      decoration: InputDecoration(
-                        prefixIcon: const Icon(Icons.search),
-                        hintText: 'Tìm SĐT, mã đơn, số tiền, nội dung',
-                        suffixIcon: _searchController.text.isEmpty
-                            ? null
-                            : IconButton(
-                                onPressed: () => setState(
-                                  _searchController.clear,
-                                ),
-                                icon: const Icon(Icons.clear),
-                              ),
-                        border: const OutlineInputBorder(),
-                        isDense: true,
-                      ),
-                      onChanged: (_) => setState(() {}),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: Wrap(
-                      spacing: 8,
-                      children: [
-                        ChoiceChip(
-                          label: const Text('Tất cả'),
-                          selected: _channelFilter == 'all',
-                          onSelected: (_) =>
-                              setState(() => _channelFilter = 'all'),
-                        ),
-                        ChoiceChip(
-                          avatar: const Icon(Icons.sms_outlined, size: 16),
-                          label: const Text('SMS'),
-                          selected: _channelFilter == 'sms',
-                          onSelected: (_) =>
-                              setState(() => _channelFilter = 'sms'),
-                        ),
-                        ChoiceChip(
-                          avatar: const Icon(Icons.chat_bubble_outline, size: 16),
-                          label: const Text('Zalo'),
-                          selected: _channelFilter == 'zalo',
-                          onSelected: (_) =>
-                              setState(() => _channelFilter = 'zalo'),
-                        ),
-                      ],
-                    ),
-                  ),
-                  _buildSectionTitle(
-                    'Chờ khách chuyển (${pendingRecords.length})',
-                    Icons.hourglass_top,
-                    Colors.orange.shade800,
-                  ),
-                  const SizedBox(height: 8),
-                  if (pendingRecords.isEmpty)
-                    _buildEmptyState('Không còn khoản nào đang chờ.')
-                  else
-                    ...pendingRecords.map((r) => _buildRecordCard(r, status: 'pending')),
-
-                  const SizedBox(height: 14),
-                  Card(
-                    child: ExpansionTile(
-                      initiallyExpanded: true,
-                      leading: Icon(
-                        Icons.account_balance_wallet_outlined,
-                        color: Colors.blue.shade700,
-                      ),
-                      title: Text(
-                        'Đã nhận (${receivedRecords.length})',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      subtitle: const Text(
-                        'Bấm xem/tải ảnh POD để chuyển đơn sang "Đã xong"',
-                        style: TextStyle(fontSize: 11),
-                      ),
-                      children: receivedRecords.isEmpty
-                          ? [
-                              const Padding(
-                                padding: EdgeInsets.all(16),
-                                child: Center(
-                                  child: Text(
-                                    'Chưa có khoản đã nhận nào cần tải POD.',
-                                    style: TextStyle(color: Colors.grey),
-                                  ),
-                                ),
-                              ),
-                            ]
-                          : receivedRecords
-                              .map((r) => _buildRecordCard(r, status: 'received'))
-                              .toList(),
-                    ),
-                  ),
-
-                  const SizedBox(height: 14),
-                  Card(
-                    color: Colors.green.shade50.withValues(alpha: 0.6),
-                    child: ExpansionTile(
-                      initiallyExpanded: false,
-                      leading: Icon(
-                        Icons.task_alt,
-                        color: Colors.green.shade700,
-                      ),
-                      title: Text(
-                        'Đã xong / Đã tải POD (${doneRecords.length})',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: Colors.green.shade900,
-                        ),
-                      ),
-                      subtitle: const Text(
-                        'Đã hoàn tất · Chỉ lưu trong app, không hiện trên popup nổi',
-                        style: TextStyle(fontSize: 11),
-                      ),
-                      children: doneRecords.isEmpty
-                          ? [
-                              const Padding(
-                                padding: EdgeInsets.all(16),
-                                child: Center(
-                                  child: Text(
-                                    'Chưa có đơn hàng nào hoàn tất.',
-                                    style: TextStyle(color: Colors.grey),
-                                  ),
-                                ),
-                              ),
-                            ]
-                          : doneRecords
-                              .map((r) => _buildRecordCard(r, status: 'done'))
-                              .toList(),
+                  Icon(Icons.mark_chat_read, size: 14, color: Colors.blue.shade700),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Có $repliedPendingCount khách vừa phản hồi tin nhắn',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.blue.shade900,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                 ],
               ),
             ),
+          ],
+        ],
+      ),
     );
   }
 
-  Widget _buildSummary(int pendingTotal, int receivedTotal, int doneTotal) {
-    final repliedPendingCount = _pending
-        .where((record) => record.customerReplied)
-        .length;
-    return Card(
-      color: Colors.orange.shade50,
+  Widget _buildSummaryItem({
+    required String label,
+    required int count,
+    required int total,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(6),
       child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
+        padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
+        child: Column(
           children: [
-            Icon(Icons.account_balance_wallet, color: Colors.orange.shade800),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '${_pending.length} chờ · ${_received.length} đã nhận · ${_done.length} đã xong',
-                    style: const TextStyle(fontWeight: FontWeight.w600),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey.shade700,
                   ),
-                  const SizedBox(height: 3),
-                  Text('Tổng đang chờ: ${_formatAmount(pendingTotal)}'),
-                  Text('Tổng đã nhận: ${_formatAmount(receivedTotal)}'),
-                  if (_done.isNotEmpty)
-                    Text('Tổng đã xong: ${_formatAmount(doneTotal)}'),
-                  Text('Khách đã phản hồi: $repliedPendingCount'),
-                ],
+                ),
+                const SizedBox(width: 3),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0.5),
+                  decoration: BoxDecoration(
+                    color: color,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    '$count',
+                    style: const TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 2),
+            Text(
+              _formatAmount(total),
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: color,
               ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ],
         ),
@@ -625,16 +773,131 @@ class _PaymentReconciliationScreenState
     );
   }
 
-  Widget _buildSectionTitle(String title, IconData icon, Color color) {
-    return Row(
-      children: [
-        Icon(icon, size: 19, color: color),
-        const SizedBox(width: 8),
-        Text(
-          title,
-          style: TextStyle(fontWeight: FontWeight.bold, color: color),
+  Widget _buildPendingTab(List<_PaymentRecord> records) {
+    if (records.isEmpty) {
+      return RefreshIndicator(
+        onRefresh: _loadRecords,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(24),
+          children: [
+            _buildEmptyState('Không có khoản nào đang chờ chuyển.'),
+          ],
         ),
-      ],
+      );
+    }
+    return RefreshIndicator(
+      onRefresh: _loadRecords,
+      child: ListView.builder(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+        itemCount: records.length,
+        itemBuilder: (context, index) =>
+            _buildRecordCard(records[index], status: 'pending'),
+      ),
+    );
+  }
+
+  Widget _buildReceivedTab(List<_PaymentRecord> records) {
+    if (records.isEmpty) {
+      return RefreshIndicator(
+        onRefresh: _loadRecords,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(24),
+          children: [
+            _buildEmptyState('Chưa có khoản đã nhận nào cần xử lý POD.'),
+          ],
+        ),
+      );
+    }
+    return RefreshIndicator(
+      onRefresh: _loadRecords,
+      child: ListView.builder(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        itemCount: records.length + 1,
+        itemBuilder: (context, index) {
+          if (index == 0) {
+            return Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.blue.shade100),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, size: 16, color: Colors.blue.shade800),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Bấm biểu tượng tải xuống để lưu POD và chuyển đơn sang "Đã xong".',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.blue.shade900,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+          return _buildRecordCard(records[index - 1], status: 'received');
+        },
+      ),
+    );
+  }
+
+  Widget _buildDoneTab(List<_PaymentRecord> records) {
+    if (records.isEmpty) {
+      return RefreshIndicator(
+        onRefresh: _loadRecords,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(24),
+          children: [
+            _buildEmptyState('Chưa có đơn hàng nào hoàn tất.'),
+          ],
+        ),
+      );
+    }
+    return RefreshIndicator(
+      onRefresh: _loadRecords,
+      child: ListView.builder(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        itemCount: records.length + 1,
+        itemBuilder: (context, index) {
+          if (index == 0) {
+            return Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.green.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.green.shade200),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.check_circle_outline, size: 16, color: Colors.green.shade800),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Đã hoàn tất & tải POD. Các đơn này chỉ lưu trong app để đối soát, không hiện trên popup nổi.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.green.shade900,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+          return _buildRecordCard(records[index - 1], status: 'done');
+        },
+      ),
     );
   }
 
