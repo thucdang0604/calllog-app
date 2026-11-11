@@ -45,6 +45,15 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.util.Log;
+import android.app.AlertDialog;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.text.TextUtils;
+import android.view.ContextThemeWrapper;
+
+import java.text.Normalizer;
+import java.util.Locale;
+import java.util.regex.Pattern;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -90,6 +99,9 @@ public class FloatingWindowService extends Service {
     private TextView paymentReceivedTab;
     private TextView panelResizeHandle;
     private LinearLayout smsInputContainer;
+    private LinearLayout smsQuickNotesContainer;
+    private int selectedQuickNoteIndex = -1;
+    private final List<String> currentQuickNotes = new ArrayList<>();
     private EditText amountInput;
     private Button sendSmsButton, sendZaloButton, cancelSmsButton;
 
@@ -803,6 +815,7 @@ public class FloatingWindowService extends Service {
 
         // SMS controls
         smsInputContainer = floatingView.findViewById(R.id.sms_input_container);
+        smsQuickNotesContainer = floatingView.findViewById(R.id.sms_quick_notes_container);
         amountInput = floatingView.findViewById(R.id.amount_input);
         sendSmsButton = floatingView.findViewById(R.id.send_sms_button);
         sendZaloButton = floatingView.findViewById(R.id.send_zalo_button);
@@ -1310,6 +1323,8 @@ public class FloatingWindowService extends Service {
             amountInput.requestFocus();
         }
 
+        loadAndRenderQuickNotes();
+
         setWindowFocusable(true);
 
         mainHandler.postDelayed(() -> {
@@ -1324,6 +1339,10 @@ public class FloatingWindowService extends Service {
 
     private void hideSmsInput() {
         pendingSmsCallIndex = -1;
+        selectedQuickNoteIndex = -1;
+        if (smsQuickNotesContainer != null) {
+            smsQuickNotesContainer.removeAllViews();
+        }
 
         if (amountInput != null) {
             InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
@@ -1345,6 +1364,104 @@ public class FloatingWindowService extends Service {
         }
 
         setWindowFocusable(false);
+    }
+
+    public static String removeAccents(String text) {
+        if (text == null || text.isEmpty()) return "";
+        String normalized = text.replace("Đ", "D").replace("đ", "d").replace("₫", "d");
+        normalized = Normalizer.normalize(normalized, Normalizer.Form.NFD);
+        Pattern pattern = Pattern.compile("\\p{InCombiningDiacriticalMarks}+");
+        return pattern.matcher(normalized).replaceAll("");
+    }
+
+    private void loadAndRenderQuickNotes() {
+        if (smsQuickNotesContainer == null) return;
+        smsQuickNotesContainer.removeAllViews();
+        selectedQuickNoteIndex = -1;
+
+        currentQuickNotes.clear();
+        String json = getPrefs().getString("sms_quick_notes", null);
+        if (json != null && !json.trim().isEmpty()) {
+            try {
+                JSONArray arr = new JSONArray(json);
+                for (int i = 0; i < arr.length(); i++) {
+                    String item = arr.optString(i, "").trim();
+                    if (!item.isEmpty()) currentQuickNotes.add(item);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Loi doc sms_quick_notes", e);
+            }
+        }
+        if (currentQuickNotes.isEmpty()) {
+            currentQuickNotes.add("gui hang tai bao ve");
+            currentQuickNotes.add("gui hang co ban nuoc");
+            currentQuickNotes.add("don shopee 0d gui trong thung EMG");
+        }
+
+        for (int i = 0; i < currentQuickNotes.size() && i < 6; i++) {
+            final int index = i;
+            String note = currentQuickNotes.get(i);
+            TextView btn = new TextView(this);
+            btn.setText(note);
+            btn.setTextSize(11);
+            btn.setMaxLines(1);
+            btn.setEllipsize(TextUtils.TruncateAt.END);
+            btn.setPadding(dp(8), dp(4), dp(8), dp(4));
+
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                dp(26)
+            );
+            lp.setMarginEnd(dp(4));
+            btn.setLayoutParams(lp);
+
+            updateQuickNoteButtonVisual(btn, false);
+
+            btn.setOnClickListener(v -> {
+                performHapticFeedback();
+                if (selectedQuickNoteIndex == index) {
+                    selectedQuickNoteIndex = -1;
+                } else {
+                    selectedQuickNoteIndex = index;
+                    String selNote = currentQuickNotes.get(index);
+                    String unaccented = removeAccents(selNote).toLowerCase(Locale.ROOT);
+                    if ((unaccented.contains("0d") || unaccented.contains("0 vnd") || unaccented.contains("0 d"))
+                            && amountInput != null && amountInput.getText().toString().trim().isEmpty()) {
+                        amountInput.setText("0");
+                    }
+                }
+                refreshQuickNoteButtonsUI();
+            });
+
+            smsQuickNotesContainer.addView(btn);
+        }
+    }
+
+    private void updateQuickNoteButtonVisual(TextView button, boolean isSelected) {
+        GradientDrawable gd = new GradientDrawable();
+        if (isSelected) {
+            gd.setColor(0xFF1976D2);
+            gd.setStroke(dp(1), 0xFF90CAF9);
+            button.setTextColor(0xFFFFFFFF);
+            button.setTypeface(null, Typeface.BOLD);
+        } else {
+            gd.setColor(0x33FFFFFF);
+            gd.setStroke(dp(1), 0x33FFFFFF);
+            button.setTextColor(0xDDFFFFFF);
+            button.setTypeface(null, Typeface.NORMAL);
+        }
+        gd.setCornerRadius(dp(6));
+        button.setBackground(gd);
+    }
+
+    private void refreshQuickNoteButtonsUI() {
+        if (smsQuickNotesContainer == null) return;
+        for (int i = 0; i < smsQuickNotesContainer.getChildCount(); i++) {
+            View child = smsQuickNotesContainer.getChildAt(i);
+            if (child instanceof TextView) {
+                updateQuickNoteButtonVisual((TextView) child, i == selectedQuickNoteIndex);
+            }
+        }
     }
 
     private void sendSms() {
@@ -1370,23 +1487,60 @@ public class FloatingWindowService extends Service {
             enteredAmount = amountInput.getText().toString().trim();
         }
 
+        String selectedNote = (selectedQuickNoteIndex >= 0 && selectedQuickNoteIndex < currentQuickNotes.size())
+            ? currentQuickNotes.get(selectedQuickNoteIndex)
+            : "";
+
+        boolean isZeroOrder = "0".equals(enteredAmount) || "00".equals(enteredAmount)
+            || "0đ".equalsIgnoreCase(enteredAmount) || "0d".equalsIgnoreCase(enteredAmount)
+            || "0vnd".equalsIgnoreCase(enteredAmount);
+
+        if (enteredAmount.isEmpty() && !selectedNote.isEmpty()) {
+            String noteLower = removeAccents(selectedNote).toLowerCase(Locale.ROOT);
+            if (noteLower.contains("0d") || noteLower.contains("0 vnd") || noteLower.contains("0 d")) {
+                isZeroOrder = true;
+                enteredAmount = "0";
+            }
+        }
+
         if (enteredAmount.isEmpty()) {
-            Toast.makeText(this, "Vui lòng nhập số tiền", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Vui lòng nhập số tiền hoặc 0", Toast.LENGTH_SHORT).show();
             return;
         }
 
-        String amount = normalizePaymentAmount(enteredAmount);
+        String amount = isZeroOrder ? "0" : normalizePaymentAmount(enteredAmount);
         if (amount == null) {
             Toast.makeText(this, "Số tiền không hợp lệ", Toast.LENGTH_SHORT).show();
             return;
         }
 
         String template = getPrefs().getString("sms_template", "19034108972011 techcombank Dang Tri Thuc. ");
+        String baseTemplate = template != null ? template.trim() : "";
 
-        // Keep the SMS body in GSM's ASCII range; the app UI formats this value as đ.
-        // A Vietnamese đ forces UCS-2 and can turn this 80+ character template into a
-        // multipart SMS, which the previous single-part send path rejected.
-        String message = template + amount + " VND";
+        String message;
+        if (isZeroOrder) {
+            // Trường hợp nhập số 0 vào ô tiền: không hiện mẫu tài khoản, chỉ hiện Đơn hàng 0 VND - "mẫu tin nhắn"
+            String base0 = "Don hang 0 VND";
+            if (!selectedNote.isEmpty()) {
+                message = base0 + " - " + selectedNote;
+            } else {
+                message = base0;
+            }
+        } else {
+            String baseAmount = amount + " VND";
+            if (!selectedNote.isEmpty()) {
+                message = baseTemplate.isEmpty()
+                    ? (baseAmount + " - " + selectedNote)
+                    : (baseTemplate + " " + baseAmount + " - " + selectedNote);
+            } else {
+                message = baseTemplate.isEmpty()
+                    ? baseAmount
+                    : (baseTemplate + " " + baseAmount);
+            }
+        }
+
+        // Tự động chuyển toàn bộ tin nhắn thành không dấu để tối đa hoá độ dài (160 ký tự/tin theo chuẩn GSM 7-bit)
+        final String finalMessage = removeAccents(message.trim());
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
             Toast.makeText(this, "⚠️ Chưa cấp quyền gửi SMS. Hãy cấp quyền trong App!", Toast.LENGTH_LONG).show();
@@ -1394,9 +1548,59 @@ public class FloatingWindowService extends Service {
             return;
         }
 
+        // Tính toán số phần tin nhắn sẽ bị tính cước
+        SmsManager checkSmsManager;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            checkSmsManager = getSystemService(SmsManager.class);
+        } else {
+            checkSmsManager = SmsManager.getDefault();
+        }
+        ArrayList<String> parts = checkSmsManager.divideMessage(finalMessage);
+        final int partCount = parts != null ? parts.size() : 1;
+
         final String finalCleanPhone = cleanPhone;
         final String finalAmount = amount;
-        String sessionId = PaymentTrackingStore.createSmsSession(this, finalCleanPhone, finalAmount, message);
+
+        if (partCount >= 2) {
+            // Cảnh báo nếu tin nhắn bị tính là 2 SMS truyền thống trở lên
+            showMultipartSmsWarningDialog(finalCleanPhone, finalMessage, partCount, () -> {
+                executeSendSms(finalCleanPhone, finalAmount, finalMessage, partCount);
+            });
+        } else {
+            executeSendSms(finalCleanPhone, finalAmount, finalMessage, 1);
+        }
+    }
+
+    private void showMultipartSmsWarningDialog(String phone, String message, int partCount, Runnable onConfirm) {
+        mainHandler.post(() -> {
+            try {
+                AlertDialog.Builder builder = new AlertDialog.Builder(
+                    new ContextThemeWrapper(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                );
+                builder.setTitle("⚠️ Cảnh báo cước " + partCount + " SMS");
+                builder.setMessage("Tin nhắn dài (" + message.length() + " ký tự) sẽ bị nhà mạng tính cước " + partCount + " tin SMS viễn thông.\n\nNội dung gửi:\n\"" + message + "\"\n\nBạn có muốn gửi không?");
+                builder.setPositiveButton("Gửi (" + partCount + " tin)", (dialog, which) -> {
+                    onConfirm.run();
+                });
+                builder.setNegativeButton("Hủy", (dialog, which) -> {
+                    dialog.dismiss();
+                });
+                AlertDialog dialog = builder.create();
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);
+                } else {
+                    dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_PHONE);
+                }
+                dialog.show();
+            } catch (Exception e) {
+                Log.e(TAG, "Không hiển thị được dialog cảnh báo SMS dài", e);
+                onConfirm.run();
+            }
+        });
+    }
+
+    private void executeSendSms(String phone, String amount, String message, int partCount) {
+        String sessionId = PaymentTrackingStore.createSmsSession(this, phone, amount, message);
         if (sessionId.isEmpty()) {
             Toast.makeText(this, "Không lưu được phiên nhắn tin", Toast.LENGTH_LONG).show();
             hideSmsInput();
@@ -1424,11 +1628,24 @@ public class FloatingWindowService extends Service {
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
                 );
 
-                smsManager.sendTextMessage(finalCleanPhone, null, message, sentPendingIntent, null);
+                ArrayList<String> smsParts = smsManager.divideMessage(message);
+                if (smsParts != null && smsParts.size() > 1) {
+                    ArrayList<PendingIntent> sentIntents = new ArrayList<>();
+                    sentIntents.add(sentPendingIntent);
+                    for (int i = 1; i < smsParts.size(); i++) {
+                        sentIntents.add(null);
+                    }
+                    smsManager.sendMultipartTextMessage(phone, null, smsParts, sentIntents, null);
+                } else {
+                    smsManager.sendTextMessage(phone, null, message, sentPendingIntent, null);
+                }
 
                 mainHandler.post(() -> {
                     performHapticFeedback();
-                    Toast.makeText(FloatingWindowService.this, "Đang gửi SMS → " + finalCleanPhone, Toast.LENGTH_SHORT).show();
+                    String notice = partCount > 1
+                        ? ("Đang gửi " + partCount + " SMS → " + phone)
+                        : ("Đang gửi SMS → " + phone);
+                    Toast.makeText(FloatingWindowService.this, notice, Toast.LENGTH_SHORT).show();
                 });
             } catch (Exception e) {
                 PaymentTrackingStore.setSmsStatus(FloatingWindowService.this, finalSessionId, false);
@@ -1440,7 +1657,7 @@ public class FloatingWindowService extends Service {
         try {
             Intent scanIntent = new Intent(this, OrderScanCaptureActivity.class);
             scanIntent.putExtra(OrderScanCaptureActivity.EXTRA_SESSION_ID, finalSessionId);
-            scanIntent.putExtra(OrderScanCaptureActivity.EXTRA_PHONE, finalCleanPhone);
+            scanIntent.putExtra(OrderScanCaptureActivity.EXTRA_PHONE, phone);
             scanIntent.putExtra(OrderScanCaptureActivity.EXTRA_MESSAGE, message);
             scanIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
             startActivity(scanIntent);
@@ -1553,7 +1770,8 @@ public class FloatingWindowService extends Service {
 
         try {
             long amount = Long.parseLong(digits);
-            if (amount <= 0) return null;
+            if (amount < 0) return null;
+            if (amount == 0) return "0";
             // Short inputs are entered in thousand-dong units (for example,
             // 1923 means 1,923,000 VND). Longer values are treated as VND.
             if (amount <= 9999) amount = Math.multiplyExact(amount, 1000L);

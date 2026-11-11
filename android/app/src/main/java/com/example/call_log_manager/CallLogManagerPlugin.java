@@ -153,6 +153,12 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
             case "saveSmsTemplate":
                 saveSmsTemplate(call, result);
                 break;
+            case "getSmsQuickNotes":
+                getSmsQuickNotes(result);
+                break;
+            case "saveSmsQuickNotes":
+                saveSmsQuickNotes(call, result);
+                break;
             case "getPaymentTrackingRecords":
                 getPaymentTrackingRecords(result);
                 break;
@@ -505,6 +511,46 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
         if (template != null) {
             android.content.SharedPreferences prefs = context.getSharedPreferences("floating_window_state", Context.MODE_PRIVATE);
             prefs.edit().putString("sms_template", template).apply();
+            result.success(true);
+        } else {
+            result.success(false);
+        }
+    }
+
+    private void getSmsQuickNotes(Result result) {
+        android.content.SharedPreferences prefs = context.getSharedPreferences("floating_window_state", Context.MODE_PRIVATE);
+        String json = prefs.getString("sms_quick_notes", null);
+        List<String> list = new ArrayList<>();
+        if (json != null && !json.trim().isEmpty()) {
+            try {
+                JSONArray arr = new JSONArray(json);
+                for (int i = 0; i < arr.length(); i++) {
+                    String item = arr.optString(i, "").trim();
+                    if (!item.isEmpty()) list.add(item);
+                }
+            } catch (Exception e) {
+                Log.e("CallLogManager", "Loi doc sms_quick_notes", e);
+            }
+        }
+        if (list.isEmpty()) {
+            list.add("gui hang tai bao ve");
+            list.add("gui hang co ban nuoc");
+            list.add("don shopee 0d gui trong thung EMG");
+        }
+        result.success(list);
+    }
+
+    private void saveSmsQuickNotes(MethodCall call, Result result) {
+        List<String> notes = call.argument("notes");
+        if (notes != null) {
+            JSONArray arr = new JSONArray();
+            for (String note : notes) {
+                if (note != null && !note.trim().isEmpty() && arr.length() < 6) {
+                    arr.put(note.trim());
+                }
+            }
+            android.content.SharedPreferences prefs = context.getSharedPreferences("floating_window_state", Context.MODE_PRIVATE);
+            prefs.edit().putString("sms_quick_notes", arr.toString()).apply();
             result.success(true);
         } else {
             result.success(false);

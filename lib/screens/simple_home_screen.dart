@@ -455,6 +455,7 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
   static const _pendingLicenseSyncWindow = Duration(days: 3);
   final TextEditingController _controller = TextEditingController();
   final LicenseApiService _licenseApi = LicenseApiService();
+  List<String> _quickNotes = [];
   bool _hasSmsPermission = false;
   bool _hasIncomingSmsPermission = false;
   bool _isAutoFakeSmsIntent = false;
@@ -505,6 +506,15 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
     try {
       const channel = MethodChannel('call_log_manager');
       final String template = await channel.invokeMethod('getSmsTemplate');
+      final List<dynamic>? rawQuickNotes =
+          await channel.invokeMethod<List<dynamic>>('getSmsQuickNotes');
+      final quickNotes = rawQuickNotes != null
+          ? rawQuickNotes.map((e) => e.toString()).toList()
+          : <String>[
+              'gui hang tai bao ve',
+              'gui hang co ban nuoc',
+              'don shopee 0d gui trong thung EMG',
+            ];
       final bool hasPerm = await channel.invokeMethod('hasSmsPermission');
       final bool hasIncomingPerm = await channel.invokeMethod(
         'hasIncomingSmsPermission',
@@ -517,6 +527,7 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
       if (mounted) {
         setState(() {
           _controller.text = template;
+          _quickNotes = quickNotes;
           _hasSmsPermission = hasPerm;
           _hasIncomingSmsPermission = hasIncomingPerm;
           _isAutoFakeSmsIntent = autoFakeIntent;
@@ -607,23 +618,26 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
     }
   }
 
-  Future<void> _saveTemplate() async {
+  Future<void> _saveTemplate({bool showFeedback = true}) async {
     try {
       const channel = MethodChannel('call_log_manager');
       await channel.invokeMethod('saveSmsTemplate', {
         'template': _controller.text,
       });
-      if (mounted) {
+      await channel.invokeMethod('saveSmsQuickNotes', {
+        'notes': _quickNotes,
+      });
+      if (mounted && showFeedback) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('✅ Đã lưu mẫu tin nhắn SMS!'),
+            content: Text('✅ Đã lưu mẫu tin nhắn & các nút ghi chú SMS!'),
             backgroundColor: Colors.green,
             duration: Duration(seconds: 2),
           ),
         );
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted && showFeedback) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('❌ Lỗi khi lưu: $e'),
@@ -631,6 +645,75 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
           ),
         );
       }
+    }
+  }
+
+  void _showAddEditQuickNoteDialog({int? index}) {
+    final isEditing = index != null && index >= 0 && index < _quickNotes.length;
+    final textController = TextEditingController(
+      text: isEditing ? _quickNotes[index] : '',
+    );
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(isEditing ? 'Sửa nút ghi chú' : 'Thêm nút ghi chú (Tối đa 6)'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: textController,
+              autofocus: true,
+              decoration: const InputDecoration(
+                hintText: 'VD: gui hang tai bao ve',
+                labelText: 'Nội dung ghi chú',
+                border: OutlineInputBorder(),
+              ),
+              maxLength: 60,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Gợi ý: Nhập không dấu để tối đa hoá độ dài tin nhắn GSM (160 ký tự).',
+              style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Hủy'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final text = textController.text.trim();
+              if (text.isNotEmpty) {
+                setState(() {
+                  if (isEditing) {
+                    _quickNotes[index] = text;
+                  } else {
+                    if (_quickNotes.length < 6) {
+                      _quickNotes.add(text);
+                    }
+                  }
+                });
+                Navigator.of(ctx).pop();
+                _saveTemplate(showFeedback: false);
+              }
+            },
+            child: Text(isEditing ? 'Lưu' : 'Thêm'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _deleteQuickNote(int index) {
+    if (index >= 0 && index < _quickNotes.length) {
+      setState(() {
+        _quickNotes.removeAt(index);
+      });
+      _saveTemplate(showFeedback: false);
     }
   }
 
@@ -1382,6 +1465,82 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
             ),
             style: const TextStyle(fontSize: 13),
           ),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Nút mẫu ghi chú nhanh (Tối đa 6)',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+              ),
+              Text(
+                '${_quickNotes.length}/6',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: _quickNotes.length >= 6 ? Colors.orange : Colors.grey[600],
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Chọn trên cửa sổ nổi để bấm 1 chạm đính kèm vào tin nhắn (tự động bỏ dấu để tối ưu 160 ký tự)',
+            style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+          ),
+          const SizedBox(height: 8),
+          if (_quickNotes.isEmpty)
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.grey[100],
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Center(
+                child: Text(
+                  'Chưa có mẫu ghi chú nào. Hãy thêm mẫu bên dưới.',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ),
+            )
+          else
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: List.generate(_quickNotes.length, (idx) {
+                final note = _quickNotes[idx];
+                return InputChip(
+                  avatar: CircleAvatar(
+                    backgroundColor: Colors.blue[700],
+                    child: Text(
+                      '${idx + 1}',
+                      style: const TextStyle(fontSize: 10, color: Colors.white),
+                    ),
+                  ),
+                  label: Text(note, style: const TextStyle(fontSize: 12)),
+                  onPressed: () => _showAddEditQuickNoteDialog(index: idx),
+                  onDeleted: () => _deleteQuickNote(idx),
+                  deleteIcon: const Icon(Icons.close, size: 16),
+                  deleteButtonTooltipMessage: 'Xóa mẫu này',
+                  backgroundColor: Colors.blue.withValues(alpha: 0.08),
+                  side: BorderSide(color: Colors.blue.withValues(alpha: 0.3)),
+                );
+              }),
+            ),
+          const SizedBox(height: 8),
+          if (_quickNotes.length < 6)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => _showAddEditQuickNoteDialog(),
+                icon: const Icon(Icons.add, size: 18),
+                label: Text('Thêm nút ghi chú (${6 - _quickNotes.length} vị trí còn lại)'),
+                style: TextButton.styleFrom(
+                  foregroundColor: Colors.blue[800],
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                ),
+              ),
+            ),
           const SizedBox(height: 12),
           Row(
             children: [
