@@ -1,6 +1,9 @@
 package com.example.call_log_manager;
 
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.content.Context;
 import android.util.DisplayMetrics;
 import android.view.MotionEvent;
@@ -13,6 +16,8 @@ public class FloatingTouchListener implements View.OnTouchListener {
     private final View floatingView;
     private final Context context;
     private final boolean triggerClickOnTap;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private Runnable snapRunnable = null;
     private int initialX, initialY;
     private float initialTouchX, initialTouchY;
     private boolean isDragging = false;
@@ -35,6 +40,10 @@ public class FloatingTouchListener implements View.OnTouchListener {
 
         switch (event.getAction()) {
             case MotionEvent.ACTION_DOWN:
+                if (snapRunnable != null) {
+                    handler.removeCallbacks(snapRunnable);
+                    snapRunnable = null;
+                }
                 WindowManager.LayoutParams currentParams = (WindowManager.LayoutParams) floatingView.getLayoutParams();
                 if (currentParams != null) {
                     initialX = currentParams.x;
@@ -74,10 +83,11 @@ public class FloatingTouchListener implements View.OnTouchListener {
                 return true;
 
             case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_CANCEL:
                 if (isDragging) {
                     snapToEdges();
                     isDragging = false;
-                } else if (triggerClickOnTap) {
+                } else if (triggerClickOnTap && event.getAction() == MotionEvent.ACTION_UP) {
                     floatingView.performClick();
                 }
                 return true;
@@ -87,14 +97,22 @@ public class FloatingTouchListener implements View.OnTouchListener {
 
     private void snapToEdges() {
         try {
+            if (snapRunnable != null) {
+                handler.removeCallbacks(snapRunnable);
+                snapRunnable = null;
+            }
+
             WindowManager.LayoutParams params = (WindowManager.LayoutParams) floatingView.getLayoutParams();
             if (params == null) return;
 
             int screenWidth = getScreenWidth();
+            int screenHeight = getScreenHeight();
             int viewWidth = floatingView.getWidth();
-            if (viewWidth <= 0) viewWidth = 200; // Fallback nếu view chưa đo xong
+            if (viewWidth <= 0) viewWidth = dp(56);
+            int viewHeight = floatingView.getHeight();
+            if (viewHeight <= 0) viewHeight = dp(56);
 
-            int padding = dp(6);
+            int padding = dp(8);
             int targetX;
             if (params.x + (viewWidth / 2) < screenWidth / 2) {
                 targetX = padding;
@@ -102,36 +120,49 @@ public class FloatingTouchListener implements View.OnTouchListener {
                 targetX = Math.max(0, screenWidth - viewWidth - padding);
             }
 
-            int viewHeight = floatingView.getHeight();
-            if (viewHeight <= 0) viewHeight = 56;
-            params.y = Math.max(0, Math.min(params.y, Math.max(0, getScreenHeight() - viewHeight)));
+            int targetY = Math.max(0, Math.min(params.y, Math.max(0, screenHeight - viewHeight - padding)));
+            params.y = targetY;
 
-            int startX = params.x;
-            if (Math.abs(startX - targetX) > 5) {
-                android.animation.ValueAnimator animator = android.animation.ValueAnimator.ofInt(startX, targetX);
-                animator.setDuration(160);
-                animator.setInterpolator(new android.view.animation.DecelerateInterpolator());
-                animator.addUpdateListener(animation -> {
-                    try {
-                        if (floatingView != null && windowManager != null) {
-                            params.x = (int) animation.getAnimatedValue();
-                            windowManager.updateViewLayout(floatingView, params);
-                        }
-                    } catch (Exception ignored) {}
-                });
-                animator.addListener(new android.animation.AnimatorListenerAdapter() {
+            final int startX = params.x;
+            final int diff = targetX - startX;
+
+            if (Math.abs(diff) > 4) {
+                final long startTime = SystemClock.uptimeMillis();
+                final long duration = 160;
+
+                snapRunnable = new Runnable() {
                     @Override
-                    public void onAnimationEnd(android.animation.Animator animation) {
+                    public void run() {
+                        if (floatingView == null || windowManager == null || !floatingView.isAttachedToWindow()) {
+                            snapRunnable = null;
+                            return;
+                        }
+                        long elapsed = SystemClock.uptimeMillis() - startTime;
+                        float t = Math.min(1.0f, (float) elapsed / duration);
+                        // Decelerate: 1 - (1 - t)^2
+                        float factor = 1.0f - (1.0f - t) * (1.0f - t);
+                        params.x = (int) (startX + diff * factor);
                         try {
-                            context.getSharedPreferences("floating_window_state", Context.MODE_PRIVATE)
-                                .edit()
-                                .putInt("floating_x", targetX)
-                                .putInt("floating_y", params.y)
-                                .apply();
+                            windowManager.updateViewLayout(floatingView, params);
                         } catch (Exception ignored) {}
+
+                        if (t < 1.0f) {
+                            handler.postDelayed(this, 16);
+                        } else {
+                            params.x = targetX;
+                            try {
+                                windowManager.updateViewLayout(floatingView, params);
+                                context.getSharedPreferences("floating_window_state", Context.MODE_PRIVATE)
+                                    .edit()
+                                    .putInt("floating_x", targetX)
+                                    .putInt("floating_y", params.y)
+                                    .apply();
+                            } catch (Exception ignored) {}
+                            snapRunnable = null;
+                        }
                     }
-                });
-                animator.start();
+                };
+                handler.post(snapRunnable);
             } else {
                 params.x = targetX;
                 windowManager.updateViewLayout(floatingView, params);
@@ -150,10 +181,22 @@ public class FloatingTouchListener implements View.OnTouchListener {
     }
 
     private int getScreenWidth() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && windowManager != null) {
+            try {
+                WindowMetrics metrics = windowManager.getCurrentWindowMetrics();
+                return metrics.getBounds().width();
+            } catch (Exception ignored) {}
+        }
         return context.getResources().getDisplayMetrics().widthPixels;
     }
 
     private int getScreenHeight() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && windowManager != null) {
+            try {
+                WindowMetrics metrics = windowManager.getCurrentWindowMetrics();
+                return metrics.getBounds().height();
+            } catch (Exception ignored) {}
+        }
         return context.getResources().getDisplayMetrics().heightPixels;
     }
 }

@@ -234,44 +234,152 @@ class _SimpleHomeScreenState extends State<SimpleHomeScreen>
 
           return SingleChildScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 24),
             child: Column(
               children: [
-                ExpansionTile(
-                  initiallyExpanded: true,
-                  leading: const Icon(Icons.local_shipping_outlined),
-                  title: const Text('Giao hàng & chuyển khoản'),
-                  subtitle: const Text('Popup nhanh, cuộc gọi và đối soát'),
-                  children: [
-                    const FloatingWindowWidget(),
-                    _buildLatestCallsPreview(provider),
-                  ],
-                ),
-                ExpansionTile(
-                  leading: const Icon(Icons.widgets_outlined),
-                  title: const Text('Tiện ích'),
-                  subtitle: const Text('Vị trí giả lập và TimeMark'),
-                  children: const [FakeGpsWidget(), TimeMarkCameraWidget()],
-                ),
-                ExpansionTile(
-                  leading: const Icon(Icons.tune_outlined),
-                  title: const Text('Cài đặt nhắn tin & QR'),
-                  subtitle: const Text('Mẫu SMS và tài khoản nhận Zalo'),
-                  children: [
-                    const _SmsTemplateConfigWidget(),
-                    ListTile(
-                      leading: const Icon(Icons.account_balance_outlined),
-                      title: const Text('Tài khoản QR Zalo'),
-                      subtitle: const Text(
-                        'Thiết lập và quét xác nhận QR tĩnh',
+                // Thẻ 1: Giao hàng & Chuyển khoản (Xanh dương)
+                Card(
+                  elevation: 1.5,
+                  margin: const EdgeInsets.only(bottom: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    side: BorderSide(color: Colors.blue.withValues(alpha: 0.2)),
+                  ),
+                  child: ExpansionTile(
+                    initiallyExpanded: true,
+                    shape: const Border(),
+                    collapsedShape: const Border(),
+                    leading: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade50,
+                        borderRadius: BorderRadius.circular(8),
                       ),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: () => Navigator.of(context).push<bool>(
-                        MaterialPageRoute<bool>(
-                          builder: (_) => const PaymentAccountSettingsScreen(),
-                        ),
+                      child: Icon(
+                        Icons.local_shipping_outlined,
+                        color: Colors.blue.shade700,
                       ),
                     ),
-                  ],
+                    title: const Text(
+                      'Giao hàng & Chuyển khoản',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                    ),
+                    subtitle: const Text(
+                      'Popup nổi, cuộc gọi và đối soát thanh toán',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                    children: [
+                      const FloatingWindowWidget(),
+                      _buildLatestCallsPreview(provider),
+                      const SizedBox(height: 8),
+                    ],
+                  ),
+                ),
+
+                // Thẻ 2: Cài đặt Tin nhắn & QR Zalo (Xanh lá)
+                Card(
+                  elevation: 1.5,
+                  margin: const EdgeInsets.only(bottom: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    side: BorderSide(color: Colors.green.withValues(alpha: 0.2)),
+                  ),
+                  child: ExpansionTile(
+                    initiallyExpanded: false,
+                    shape: const Border(),
+                    collapsedShape: const Border(),
+                    leading: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.green.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(
+                        Icons.tune_outlined,
+                        color: Colors.green.shade700,
+                      ),
+                    ),
+                    title: const Text(
+                      'Cài đặt Nhắn tin & QR Zalo',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                    ),
+                    subtitle: const Text(
+                      'Mẫu tin SMS, 6 nút chọn & tài khoản ngân hàng',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                    children: [
+                      const _SmsTemplateConfigWidget(),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                        child: Card(
+                          color: Colors.green.shade50.withValues(alpha: 0.5),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            side: BorderSide(color: Colors.green.shade200),
+                          ),
+                          child: ListTile(
+                            leading: Icon(
+                              Icons.account_balance_outlined,
+                              color: Colors.green.shade800,
+                            ),
+                            title: const Text(
+                              'Cấu hình Tài khoản QR Zalo',
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                            ),
+                            subtitle: const Text(
+                              'Thiết lập ngân hàng và quét xác nhận QR tĩnh',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () => Navigator.of(context).push<bool>(
+                              MaterialPageRoute<bool>(
+                                builder: (_) => const PaymentAccountSettingsScreen(),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Thẻ 3: Tiện ích mở rộng (Cam)
+                Card(
+                  elevation: 1.5,
+                  margin: const EdgeInsets.only(bottom: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    side: BorderSide(color: Colors.orange.withValues(alpha: 0.2)),
+                  ),
+                  child: ExpansionTile(
+                    initiallyExpanded: false,
+                    shape: const Border(),
+                    collapsedShape: const Border(),
+                    leading: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(
+                        Icons.widgets_outlined,
+                        color: Colors.orange.shade800,
+                      ),
+                    ),
+                    title: const Text(
+                      'Tiện ích mở rộng',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                    ),
+                    subtitle: const Text(
+                      'Vị trí giả lập và TimeMark Camera',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                    children: const [
+                      FakeGpsWidget(),
+                      TimeMarkCameraWidget(),
+                      SizedBox(height: 8),
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -489,6 +597,7 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
   final TextEditingController _controller = TextEditingController();
   final LicenseApiService _licenseApi = LicenseApiService();
   List<SmsQuickNote> _quickNotes = [];
+  int? _previewSelectedNoteIndex;
   bool _hasSmsPermission = false;
   bool _hasIncomingSmsPermission = false;
   bool _isAutoFakeSmsIntent = false;
@@ -527,7 +636,12 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _controller.addListener(_onControllerChanged);
     _loadConfig();
+  }
+
+  void _onControllerChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
@@ -1259,8 +1373,198 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _controller.removeListener(_onControllerChanged);
     _controller.dispose();
     super.dispose();
+  }
+
+  String _removeVietnameseAccents(String str) {
+    const vietnameseMap = {
+      'a': 'aàáảãạăằắẳẵặâầấẩẫậ',
+      'A': 'AÀÁẢÃẠĂẰẮẲẴẶÂẦẤẨẪẬ',
+      'd': 'dđ',
+      'D': 'DĐ',
+      'e': 'eèéẻẽẹêềếểễệ',
+      'E': 'EÈÉẺẼẸÊỀẾỂỄỆ',
+      'i': 'iìíỉĩị',
+      'I': 'IÌÍỈĨỊ',
+      'o': 'oòóỏõọôồốổỗộơờớởỡợ',
+      'O': 'OÒÓỎÕỌÔỒỐỔỖỘƠỜỚỞỠỢ',
+      'u': 'uùúủũụưừứửữự',
+      'U': 'UÙÚỦŨỤƯỪỨỬỮỰ',
+      'y': 'yỳýỷỹỵ',
+      'Y': 'YỲÝỶỸỴ',
+    };
+    var result = str;
+    vietnameseMap.forEach((nonAccent, accents) {
+      for (int i = 0; i < accents.length; i++) {
+        result = result.replaceAll(accents[i], nonAccent);
+      }
+    });
+    return result;
+  }
+
+  Widget _buildLiveSmsPreview() {
+    final selectedNote = (_previewSelectedNoteIndex != null &&
+            _previewSelectedNoteIndex! >= 0 &&
+            _previewSelectedNoteIndex! < _quickNotes.length)
+        ? _quickNotes[_previewSelectedNoteIndex!].content
+        : (_previewSelectedNoteIndex == -1
+            ? ''
+            : (_quickNotes.isNotEmpty ? _quickNotes.first.content : ''));
+
+    final templateText = _controller.text.trim();
+    final parts = <String>[];
+    if (templateText.isNotEmpty) parts.add(templateText);
+    parts.add('250k');
+    if (selectedNote.trim().isNotEmpty) parts.add(selectedNote.trim());
+    final sampleText = parts.join(' ');
+
+    final previewSms = _removeVietnameseAccents(sampleText);
+    final charCount = previewSms.length;
+    final int smsCount = charCount == 0
+        ? 1
+        : (charCount <= 160 ? 1 : ((charCount - 1) ~/ 153) + 1);
+    final isOver160 = charCount > 160;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: isOver160 ? Colors.orange.shade300 : Colors.blue.shade200,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.chat_bubble_outline_rounded,
+                size: 16,
+                color: isOver160 ? Colors.orange.shade800 : Colors.blue.shade700,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'Xem trước SMS thực tế gửi khách:',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: isOver160 ? Colors.orange.shade900 : Colors.blue.shade900,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: isOver160 ? Colors.orange.shade100 : Colors.green.shade100,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: isOver160 ? Colors.orange.shade400 : Colors.green.shade400,
+                  ),
+                ),
+                child: Text(
+                  isOver160
+                      ? '$charCount ký tự · $smsCount tin (tốn phí)'
+                      : '$charCount/160 ký tự · 1 tin',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    color: isOver160 ? Colors.orange.shade900 : Colors.green.shade900,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(10),
+                topRight: Radius.circular(10),
+                bottomRight: Radius.circular(10),
+                bottomLeft: Radius.circular(2),
+              ),
+              border: Border.all(color: Colors.grey.shade300),
+            ),
+            child: Text(
+              previewSms.isEmpty ? '(Chưa có nội dung mẫu)' : previewSms,
+              style: TextStyle(
+                fontSize: 12.5,
+                color: previewSms.isEmpty ? Colors.grey : Colors.grey.shade900,
+                fontFamily: 'monospace',
+                height: 1.35,
+              ),
+            ),
+          ),
+          if (_quickNotes.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Text(
+                  'Thử gắn nút:',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.grey.shade700,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(right: 4),
+                          child: ChoiceChip(
+                            label: const Text('Không ghi chú', style: TextStyle(fontSize: 11)),
+                            selected: _previewSelectedNoteIndex == -1,
+                            onSelected: (val) {
+                              setState(() {
+                                _previewSelectedNoteIndex = val ? -1 : null;
+                              });
+                            },
+                            padding: EdgeInsets.zero,
+                            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                        ),
+                        ...List.generate(_quickNotes.length, (idx) {
+                          final isSelected = (_previewSelectedNoteIndex == null && idx == 0) ||
+                              _previewSelectedNoteIndex == idx;
+                          return Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: ChoiceChip(
+                              label: Text(
+                                _quickNotes[idx].displayLabel,
+                                style: const TextStyle(fontSize: 11),
+                              ),
+                              selected: isSelected,
+                              onSelected: (val) {
+                                setState(() {
+                                  _previewSelectedNoteIndex = val ? idx : -1;
+                                });
+                              },
+                              padding: EdgeInsets.zero,
+                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                          );
+                        }),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
   @override
@@ -1526,6 +1830,8 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
             ),
             style: const TextStyle(fontSize: 13),
           ),
+          const SizedBox(height: 12),
+          _buildLiveSmsPreview(),
           const SizedBox(height: 16),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
