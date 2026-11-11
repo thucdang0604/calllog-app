@@ -83,10 +83,13 @@ class _PaymentReconciliationScreenState
   }
 
   List<_PaymentRecord> get _pending =>
-      _filteredRecords.where((record) => !record.isReceived).toList();
+      _filteredRecords.where((record) => record.isPending).toList();
 
   List<_PaymentRecord> get _received =>
       _filteredRecords.where((record) => record.isReceived).toList();
+
+  List<_PaymentRecord> get _done =>
+      _filteredRecords.where((record) => record.isDone).toList();
 
   List<_PaymentRecord> get _allReceived =>
       _records.where((record) => record.isReceived).toList();
@@ -153,6 +156,43 @@ class _PaymentReconciliationScreenState
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Không cập nhật được trạng thái: $error')),
+      );
+    }
+  }
+
+  Future<void> _setStatus(_PaymentRecord record, String status) async {
+    try {
+      await _channel.invokeMethod<bool>('setPaymentTrackingStatus', {
+        'id': record.id,
+        'status': status,
+      });
+      await _loadRecords(showLoading: false);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Không cập nhật được trạng thái: $error')),
+      );
+    }
+  }
+
+  Future<void> _saveImageAndMarkDone(_PaymentRecord record) async {
+    try {
+      await _channel.invokeMethod<String>('savePaymentTrackingImage', {
+        'id': record.id,
+      });
+      await _loadRecords(showLoading: false);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('✅ Đã lưu ảnh POD và chuyển sang danh sách Đã xong (Done)!'),
+          backgroundColor: Colors.green,
+          duration: Duration(seconds: 2),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Không lưu được ảnh POD: $error')),
       );
     }
   }
@@ -338,6 +378,7 @@ class _PaymentReconciliationScreenState
   Widget build(BuildContext context) {
     final pendingRecords = _pending;
     final receivedRecords = _received;
+    final doneRecords = _done;
     final pendingTotal = _pending.fold<int>(
       0,
       (total, record) => total + record.amountValue,
@@ -346,10 +387,10 @@ class _PaymentReconciliationScreenState
       0,
       (total, record) => total + record.amountValue,
     );
-    const headerItemCount = 6;
-    final pendingItemCount = pendingRecords.isEmpty ? 1 : pendingRecords.length;
-    final receivedStartIndex = headerItemCount + pendingItemCount;
-    final itemCount = receivedStartIndex + (receivedRecords.isEmpty ? 0 : 2);
+    final doneTotal = _done.fold<int>(
+      0,
+      (total, record) => total + record.amountValue,
+    );
 
     return Scaffold(
       appBar: AppBar(
@@ -407,114 +448,149 @@ class _PaymentReconciliationScreenState
             )
           : RefreshIndicator(
               onRefresh: _loadRecords,
-              child: ListView.builder(
+              child: ListView(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-                itemCount: itemCount,
-                itemBuilder: (context, index) {
-                  if (index == 0) {
-                    return _buildSummary(pendingTotal, receivedTotal);
-                  }
-                  if (index == 1) return const SizedBox(height: 20);
-                  if (index == 2) {
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: TextField(
-                        controller: _searchController,
-                        decoration: InputDecoration(
-                          prefixIcon: const Icon(Icons.search),
-                          hintText: 'Tìm SĐT, mã đơn, số tiền, nội dung',
-                          suffixIcon: _searchController.text.isEmpty
-                              ? null
-                              : IconButton(
-                                  onPressed: () => setState(
-                                    _searchController.clear,
-                                  ),
-                                  icon: const Icon(Icons.clear),
+                children: [
+                  _buildSummary(pendingTotal, receivedTotal, doneTotal),
+                  const SizedBox(height: 16),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: TextField(
+                      controller: _searchController,
+                      decoration: InputDecoration(
+                        prefixIcon: const Icon(Icons.search),
+                        hintText: 'Tìm SĐT, mã đơn, số tiền, nội dung',
+                        suffixIcon: _searchController.text.isEmpty
+                            ? null
+                            : IconButton(
+                                onPressed: () => setState(
+                                  _searchController.clear,
                                 ),
-                          border: const OutlineInputBorder(),
-                          isDense: true,
+                                icon: const Icon(Icons.clear),
+                              ),
+                        border: const OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Wrap(
+                      spacing: 8,
+                      children: [
+                        ChoiceChip(
+                          label: const Text('Tất cả'),
+                          selected: _channelFilter == 'all',
+                          onSelected: (_) =>
+                              setState(() => _channelFilter = 'all'),
                         ),
-                        onChanged: (_) => setState(() {}),
-                      ),
-                    );
-                  }
-                  if (index == 3) {
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: Wrap(
-                        spacing: 8,
-                        children: [
-                          ChoiceChip(
-                            label: const Text('Tất cả'),
-                            selected: _channelFilter == 'all',
-                            onSelected: (_) =>
-                                setState(() => _channelFilter = 'all'),
-                          ),
-                          ChoiceChip(
-                            avatar: const Icon(Icons.sms_outlined, size: 16),
-                            label: const Text('SMS'),
-                            selected: _channelFilter == 'sms',
-                            onSelected: (_) =>
-                                setState(() => _channelFilter = 'sms'),
-                          ),
-                          ChoiceChip(
-                            avatar: const Icon(Icons.chat_bubble_outline, size: 16),
-                            label: const Text('Zalo'),
-                            selected: _channelFilter == 'zalo',
-                            onSelected: (_) =>
-                                setState(() => _channelFilter = 'zalo'),
-                          ),
-                        ],
-                      ),
-                    );
-                  }
-                  if (index == 4) {
-                    return _buildSectionTitle(
-                      'Chờ khách chuyển (${pendingRecords.length})',
-                      Icons.hourglass_top,
-                      Colors.orange.shade800,
-                    );
-                  }
-                  if (index == 5) return const SizedBox(height: 8);
-
-                  if (index < receivedStartIndex) {
-                    if (pendingRecords.isEmpty) {
-                      return _buildEmptyState('Không còn khoản nào đang chờ.');
-                    }
-                    return _buildRecordCard(
-                      pendingRecords[index - headerItemCount],
-                      received: false,
-                    );
-                  }
-
-                  if (index == receivedStartIndex) {
-                    return const SizedBox(height: 12);
-                  }
-                  if (index == receivedStartIndex + 1) {
-                    return Card(
-                      child: ExpansionTile(
-                        leading: Icon(
-                          Icons.check_circle_outline,
-                          color: Colors.green.shade700,
+                        ChoiceChip(
+                          avatar: const Icon(Icons.sms_outlined, size: 16),
+                          label: const Text('SMS'),
+                          selected: _channelFilter == 'sms',
+                          onSelected: (_) =>
+                              setState(() => _channelFilter = 'sms'),
                         ),
-                        title: Text('Đã nhận (${receivedRecords.length})'),
-                        children: receivedRecords
-                            .map(
-                              (record) =>
-                                  _buildRecordCard(record, received: true),
-                            )
-                            .toList(),
+                        ChoiceChip(
+                          avatar: const Icon(Icons.chat_bubble_outline, size: 16),
+                          label: const Text('Zalo'),
+                          selected: _channelFilter == 'zalo',
+                          onSelected: (_) =>
+                              setState(() => _channelFilter = 'zalo'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  _buildSectionTitle(
+                    'Chờ khách chuyển (${pendingRecords.length})',
+                    Icons.hourglass_top,
+                    Colors.orange.shade800,
+                  ),
+                  const SizedBox(height: 8),
+                  if (pendingRecords.isEmpty)
+                    _buildEmptyState('Không còn khoản nào đang chờ.')
+                  else
+                    ...pendingRecords.map((r) => _buildRecordCard(r, status: 'pending')),
+
+                  const SizedBox(height: 14),
+                  Card(
+                    child: ExpansionTile(
+                      initiallyExpanded: true,
+                      leading: Icon(
+                        Icons.account_balance_wallet_outlined,
+                        color: Colors.blue.shade700,
                       ),
-                    );
-                  }
-                  return const SizedBox.shrink();
-                },
+                      title: Text(
+                        'Đã nhận (${receivedRecords.length})',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      subtitle: const Text(
+                        'Bấm xem/tải ảnh POD để chuyển đơn sang "Đã xong"',
+                        style: TextStyle(fontSize: 11),
+                      ),
+                      children: receivedRecords.isEmpty
+                          ? [
+                              const Padding(
+                                padding: EdgeInsets.all(16),
+                                child: Center(
+                                  child: Text(
+                                    'Chưa có khoản đã nhận nào cần tải POD.',
+                                    style: TextStyle(color: Colors.grey),
+                                  ),
+                                ),
+                              ),
+                            ]
+                          : receivedRecords
+                              .map((r) => _buildRecordCard(r, status: 'received'))
+                              .toList(),
+                    ),
+                  ),
+
+                  const SizedBox(height: 14),
+                  Card(
+                    color: Colors.green.shade50.withValues(alpha: 0.6),
+                    child: ExpansionTile(
+                      initiallyExpanded: false,
+                      leading: Icon(
+                        Icons.task_alt,
+                        color: Colors.green.shade700,
+                      ),
+                      title: Text(
+                        'Đã xong / Đã tải POD (${doneRecords.length})',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.green.shade900,
+                        ),
+                      ),
+                      subtitle: const Text(
+                        'Đã hoàn tất · Chỉ lưu trong app, không hiện trên popup nổi',
+                        style: TextStyle(fontSize: 11),
+                      ),
+                      children: doneRecords.isEmpty
+                          ? [
+                              const Padding(
+                                padding: EdgeInsets.all(16),
+                                child: Center(
+                                  child: Text(
+                                    'Chưa có đơn hàng nào hoàn tất.',
+                                    style: TextStyle(color: Colors.grey),
+                                  ),
+                                ),
+                              ),
+                            ]
+                          : doneRecords
+                              .map((r) => _buildRecordCard(r, status: 'done'))
+                              .toList(),
+                    ),
+                  ),
+                ],
               ),
             ),
     );
   }
 
-  Widget _buildSummary(int pendingTotal, int receivedTotal) {
+  Widget _buildSummary(int pendingTotal, int receivedTotal, int doneTotal) {
     final repliedPendingCount = _pending
         .where((record) => record.customerReplied)
         .length;
@@ -531,12 +607,14 @@ class _PaymentReconciliationScreenState
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '${_pending.length} khoản đang chờ · ${_received.length} đã nhận',
+                    '${_pending.length} chờ · ${_received.length} đã nhận · ${_done.length} đã xong',
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: 3),
                   Text('Tổng đang chờ: ${_formatAmount(pendingTotal)}'),
                   Text('Tổng đã nhận: ${_formatAmount(receivedTotal)}'),
+                  if (_done.isNotEmpty)
+                    Text('Tổng đã xong: ${_formatAmount(doneTotal)}'),
                   Text('Khách đã phản hồi: $repliedPendingCount'),
                 ],
               ),
@@ -571,7 +649,7 @@ class _PaymentReconciliationScreenState
     );
   }
 
-  Widget _buildRecordCard(_PaymentRecord record, {required bool received}) {
+  Widget _buildRecordCard(_PaymentRecord record, {required String status}) {
     final phoneDigits = record.phone.replaceAll(RegExp(r'[^0-9]'), '');
     final lastFour = phoneDigits.length <= 4
         ? phoneDigits
@@ -586,17 +664,19 @@ class _PaymentReconciliationScreenState
               cacheWidth: (52 * MediaQuery.of(context).devicePixelRatio)
                   .round(),
               fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => _recordIcon(received, record.channel),
+            errorBuilder: (_, __, ___) => _recordIcon(status, record.channel),
             ),
           )
-        : _recordIcon(received, record.channel);
+        : _recordIcon(status, record.channel);
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
-      color: record.channel == 'zalo'
-          ? Colors.blue.shade50
-          : record.smsStatus == 'simulated'
-          ? Colors.deepOrange.shade50
-          : (record.customerReplied ? Colors.lightBlue.shade50 : null),
+      color: status == 'done'
+          ? Colors.green.shade50.withValues(alpha: 0.4)
+          : (record.channel == 'zalo'
+              ? Colors.blue.shade50
+              : record.smsStatus == 'simulated'
+                  ? Colors.deepOrange.shade50
+                  : (record.customerReplied ? Colors.lightBlue.shade50 : null)),
       child: ListTile(
         onTap: () => _showRecordDetails(record),
         leading: leading,
@@ -608,7 +688,30 @@ class _PaymentReconciliationScreenState
                 style: const TextStyle(fontWeight: FontWeight.w600),
               ),
             ),
-            if (record.customerReplied)
+            if (status == 'done')
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.green.shade100,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.check, size: 14, color: Colors.green.shade800),
+                    const SizedBox(width: 2),
+                    Text(
+                      'Đã xong',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.green.shade900,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else if (record.customerReplied)
               Icon(
                 Icons.mark_chat_read_outlined,
                 size: 19,
@@ -693,31 +796,52 @@ class _PaymentReconciliationScreenState
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (status == 'received' && record.imagePath.isNotEmpty)
+              IconButton(
+                tooltip: 'Tải ảnh POD & Chuyển sang Đã xong',
+                icon: const Icon(Icons.download_for_offline, color: Colors.blue),
+                onPressed: () => _saveImageAndMarkDone(record),
+              ),
+            if (status == 'done')
+              IconButton(
+                tooltip: 'Chuyển lại về Đã nhận',
+                icon: const Icon(Icons.undo, color: Colors.grey),
+                onPressed: () => _setStatus(record, 'received'),
+              ),
             IconButton(
               tooltip: 'Xóa khoản này',
               onPressed: () => _deleteRecord(record),
               icon: const Icon(Icons.delete_outline),
             ),
-            Checkbox(
-              value: received,
-              onChanged: (value) => _setReceived(record, value ?? false),
-            ),
+            if (status != 'done')
+              Checkbox(
+                value: status == 'received',
+                onChanged: (value) => _setReceived(record, value ?? false),
+              ),
           ],
         ),
       ),
     );
   }
 
-  Widget _recordIcon(bool received, String channel) {
+  Widget _recordIcon(String status, String channel) {
+    final isDone = status == 'done';
+    final isReceived = status == 'received';
     return CircleAvatar(
-      backgroundColor: received ? Colors.green.shade50 : Colors.orange.shade50,
+      backgroundColor: isDone
+          ? Colors.green.shade100
+          : (isReceived ? Colors.blue.shade50 : Colors.orange.shade50),
       child: Icon(
-        received
-            ? Icons.check
-            : channel == 'zalo'
-            ? Icons.chat_bubble_outline
-            : Icons.sms_outlined,
-        color: received ? Colors.green.shade700 : Colors.orange.shade800,
+        isDone
+            ? Icons.task_alt
+            : (isReceived
+                ? Icons.check
+                : channel == 'zalo'
+                    ? Icons.chat_bubble_outline
+                    : Icons.sms_outlined),
+        color: isDone
+            ? Colors.green.shade800
+            : (isReceived ? Colors.blue.shade700 : Colors.orange.shade800),
       ),
     );
   }
@@ -744,7 +868,7 @@ class _PaymentRecord {
     required this.amount,
     required this.amountValue,
     required this.sentAt,
-    required this.isReceived,
+    required this.status,
     required this.smsStatus,
     required this.deliveryStatus,
     required this.createdAt,
@@ -763,7 +887,10 @@ class _PaymentRecord {
   final String amount;
   final int amountValue;
   final int sentAt;
-  final bool isReceived;
+  final String status;
+  bool get isPending => status == 'pending';
+  bool get isReceived => status == 'received';
+  bool get isDone => status == 'done';
   final String smsStatus;
   final String deliveryStatus;
   final int createdAt;
@@ -787,7 +914,7 @@ class _PaymentRecord {
       amount: amount,
       amountValue: int.tryParse(digits) ?? 0,
       sentAt: (map['sentAt'] as num?)?.toInt() ?? 0,
-      isReceived: map['status']?.toString() == 'received',
+      status: map['status']?.toString() ?? 'pending',
       smsStatus: map['smsStatus']?.toString() ?? '',
       deliveryStatus: map['deliveryStatus']?.toString() ?? '',
       createdAt: (map['createdAt'] as num?)?.toInt() ?? 0,
@@ -946,9 +1073,13 @@ class _PaymentRecordDetailsScreenState
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Đã lưu ảnh vào Pictures/PaymentReceipts.'),
+          content: Text(
+            '✅ Đã lưu ảnh POD vào Pictures/PaymentReceipts và chuyển sang danh sách Đã xong (Done)!',
+          ),
+          backgroundColor: Colors.green,
         ),
       );
+      Navigator.of(context).pop(true);
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -1066,12 +1197,23 @@ class _PaymentRecordDetailsScreenState
                   ),
                 ListTile(
                   leading: Icon(
-                    record.isReceived
-                        ? Icons.check_circle_outline
-                        : Icons.hourglass_top,
+                    record.isDone
+                        ? Icons.task_alt
+                        : (record.isReceived
+                            ? Icons.check_circle_outline
+                            : Icons.hourglass_top),
+                    color: record.isDone
+                        ? Colors.green.shade700
+                        : (record.isReceived ? Colors.blue.shade700 : null),
                   ),
                   title: const Text('Trạng thái'),
-                  subtitle: Text(record.isReceived ? 'Đã nhận' : 'Đang chờ'),
+                  subtitle: Text(
+                    record.isDone
+                        ? 'Đã xong · Đã tải ảnh POD'
+                        : (record.isReceived
+                            ? 'Đã nhận (Chờ tải POD)'
+                            : 'Đang chờ chuyển khoản'),
+                  ),
                 ),
                 ListTile(
                   leading: const Icon(Icons.schedule),
@@ -1213,7 +1355,11 @@ class _PaymentRecordDetailsScreenState
                       )
                     : const Icon(Icons.download_outlined),
                 label: Text(
-                  _isSavingImage ? 'Đang lưu ảnh...' : 'Tải ảnh về thư viện',
+                  _isSavingImage
+                      ? 'Đang tải ảnh...'
+                      : (record.isDone
+                          ? 'Tải lại ảnh về thư viện'
+                          : 'Tải ảnh POD về thư viện & Hoàn tất'),
                 ),
               ),
           ],

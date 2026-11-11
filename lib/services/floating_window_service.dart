@@ -59,4 +59,34 @@ class FloatingWindowService {
       return false;
     }
   }
+
+  /// Lấy cấu hình độ mờ { 'bubbleOpacity': int, 'panelOpacity': int }
+  static Future<Map<String, int>> getFloatingOpacity() async {
+    try {
+      final Map<dynamic, dynamic>? result =
+          await _channel.invokeMethod('getFloatingOpacity');
+      return {
+        'bubbleOpacity': (result?['bubbleOpacity'] as int?) ?? 80,
+        'panelOpacity': (result?['panelOpacity'] as int?) ?? 95,
+      };
+    } catch (e) {
+      return {'bubbleOpacity': 80, 'panelOpacity': 95};
+    }
+  }
+
+  /// Cài đặt độ mờ { 'bubbleOpacity'?: int, 'panelOpacity'?: int }
+  static Future<bool> setFloatingOpacity({
+    int? bubbleOpacity,
+    int? panelOpacity,
+  }) async {
+    try {
+      final Map<String, dynamic> args = {};
+      if (bubbleOpacity != null) args['bubbleOpacity'] = bubbleOpacity;
+      if (panelOpacity != null) args['panelOpacity'] = panelOpacity;
+      final result = await _channel.invokeMethod('setFloatingOpacity', args);
+      return result == true;
+    } catch (e) {
+      return false;
+    }
+  }
 }

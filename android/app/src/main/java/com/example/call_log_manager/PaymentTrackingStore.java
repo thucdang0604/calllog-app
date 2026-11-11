@@ -281,6 +281,27 @@ final class PaymentTrackingStore {
         });
     }
 
+    static synchronized boolean setStatus(Context context, String id, String status) {
+        if (id == null || id.isEmpty() || status == null || status.isEmpty()) return false;
+        return updateRecord(context, id, record -> {
+            try {
+                record.put("status", status);
+                if ("received".equals(status)) {
+                    if (record.optLong("receivedAt", 0L) <= 0) {
+                        record.put("receivedAt", System.currentTimeMillis());
+                    }
+                } else if ("done".equals(status)) {
+                    if (record.optLong("doneAt", 0L) <= 0) {
+                        record.put("doneAt", System.currentTimeMillis());
+                    }
+                    record.put("podDownloaded", true);
+                } else if ("pending".equals(status)) {
+                    record.put("receivedAt", JSONObject.NULL);
+                }
+            } catch (JSONException ignored) {}
+        });
+    }
+
     static synchronized int clearReceived(Context context) {
         SQLiteDatabase db = database(context);
         java.util.ArrayList<String> paths = new java.util.ArrayList<>();

@@ -665,6 +665,8 @@ public class FloatingWindowService extends Service {
                 if (floatingView != null && !bubbleMode) {
                     onNewCallDetected();
                 }
+            } else if ("refresh_opacity".equals(action)) {
+                applyCurrentOpacity();
             }
         } else {
             // Intent null: Service được Android tự khởi động lại sau khi bị kill (START_STICKY)
@@ -739,9 +741,24 @@ public class FloatingWindowService extends Service {
         windowParams.x = Math.max(0, Math.min(windowParams.x, Math.max(0, getAvailableScreenWidth() - width)));
         windowParams.y = Math.max(0, Math.min(windowParams.y, Math.max(0, getAvailableScreenHeight() - dp(56))));
         windowManager.addView(floatingView, windowParams);
+        applyCurrentOpacity();
         floatingView.post(this::keepOverlayOnScreen);
         isFloatingWindowShowing = true;
         _saveFloatingWindowState(true);
+    }
+
+    private void applyCurrentOpacity() {
+        if (floatingView == null) return;
+        int opacityPercent;
+        if (bubbleMode) {
+            opacityPercent = getPrefs().getInt("bubble_opacity", 80);
+            opacityPercent = Math.max(20, Math.min(100, opacityPercent));
+        } else {
+            opacityPercent = getPrefs().getInt("panel_opacity", 95);
+            opacityPercent = Math.max(50, Math.min(100, opacityPercent));
+        }
+        float alpha = opacityPercent / 100.0f;
+        floatingView.setAlpha(alpha);
     }
 
     private void keepOverlayOnScreen() {
@@ -962,7 +979,13 @@ public class FloatingWindowService extends Service {
             if ("sms".equals(channel)
                 && !"sent".equals(smsStatus) && !"simulated".equals(smsStatus)) continue;
 
-            boolean received = "received".equals(record.optString("status"));
+            String status = record.optString("status");
+            if ("done".equals(status)) {
+                // Đơn đã tải POD (done) chỉ hiển thị trong app, KHÔNG hiển thị trong popup thao tác nhanh
+                continue;
+            }
+
+            boolean received = "received".equals(status);
             if (received) receivedCount++;
             else pendingCount++;
 
@@ -2036,6 +2059,12 @@ public class FloatingWindowService extends Service {
 
     public static boolean isFloatingWindowVisible() {
         return isFloatingWindowShowing;
+    }
+
+    static void updateOpacityFromPrefs() {
+        FloatingWindowService service = activeService;
+        if (service == null) return;
+        service.mainHandler.post(service::applyCurrentOpacity);
     }
 
     static void refreshPaymentQueueIfVisible() {

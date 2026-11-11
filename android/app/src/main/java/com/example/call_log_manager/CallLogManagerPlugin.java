@@ -193,6 +193,15 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
             case "savePaymentTrackingImage":
                 savePaymentTrackingImage(call, result);
                 break;
+            case "setPaymentTrackingStatus":
+                setPaymentTrackingStatus(call, result);
+                break;
+            case "getFloatingOpacity":
+                getFloatingOpacity(result);
+                break;
+            case "setFloatingOpacity":
+                setFloatingOpacity(call, result);
+                break;
             case "openSmsConversation":
                 openSmsConversation(call, result);
                 break;
@@ -870,11 +879,67 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
             try {
                 Uri outputUri = PaymentReceiptImageExporter.save(context, sourcePath, finalOrderCode);
                 final String uriText = outputUri.toString();
+
+                if ("received".equals(record.optString("status"))) {
+                    PaymentTrackingStore.setStatus(context, id, "done");
+                    PaymentTrackingEventBus.notifyRecordsChanged();
+                    FloatingWindowService.refreshPaymentQueueIfVisible();
+                }
+
                 mainHandler.post(() -> result.success(uriText));
             } catch (Exception e) {
                 mainHandler.post(() -> result.error("SAVE_PAYMENT_IMAGE_ERROR", e.getMessage(), null));
             }
         });
+    }
+
+    private void setPaymentTrackingStatus(MethodCall call, Result result) {
+        String id = call.argument("id");
+        String status = call.argument("status");
+        if (id != null && !id.isEmpty() && status != null && !status.isEmpty()) {
+            boolean success = PaymentTrackingStore.setStatus(context, id, status);
+            if (success) {
+                PaymentTrackingEventBus.notifyRecordsChanged();
+                FloatingWindowService.refreshPaymentQueueIfVisible();
+            }
+            result.success(success);
+        } else {
+            result.success(false);
+        }
+    }
+
+    private void getFloatingOpacity(Result result) {
+        android.content.SharedPreferences prefs = context.getSharedPreferences("floating_window_state", Context.MODE_PRIVATE);
+        int bubbleOpacity = prefs.getInt("bubble_opacity", 80);
+        int panelOpacity = prefs.getInt("panel_opacity", 95);
+        Map<String, Object> map = new HashMap<>();
+        map.put("bubbleOpacity", bubbleOpacity);
+        map.put("panelOpacity", panelOpacity);
+        result.success(map);
+    }
+
+    private void setFloatingOpacity(MethodCall call, Result result) {
+        android.content.SharedPreferences prefs = context.getSharedPreferences("floating_window_state", Context.MODE_PRIVATE);
+        android.content.SharedPreferences.Editor editor = prefs.edit();
+        Integer bubbleOpacity = call.argument("bubbleOpacity");
+        Integer panelOpacity = call.argument("panelOpacity");
+
+        if (bubbleOpacity != null && bubbleOpacity >= 20 && bubbleOpacity <= 100) {
+            editor.putInt("bubble_opacity", bubbleOpacity);
+        }
+        if (panelOpacity != null && panelOpacity >= 50 && panelOpacity <= 100) {
+            editor.putInt("panel_opacity", panelOpacity);
+        }
+        editor.apply();
+
+        FloatingWindowService.updateOpacityFromPrefs();
+        try {
+            Intent intent = new Intent(context, FloatingWindowService.class);
+            intent.putExtra("action", "refresh_opacity");
+            context.startService(intent);
+        } catch (Exception ignored) {}
+
+        result.success(true);
     }
 
     private void getDisplayCallCount(Result result) {

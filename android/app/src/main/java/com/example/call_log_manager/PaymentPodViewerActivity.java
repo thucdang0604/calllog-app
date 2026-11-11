@@ -36,6 +36,7 @@ public final class PaymentPodViewerActivity extends Activity {
     private static final int MAX_PREVIEW_SIDE = 2560;
 
     private final ExecutorService imageExecutor = Executors.newSingleThreadExecutor();
+    private String recordId = "";
     private String sourcePath = "";
     private String orderCode = "";
     private ImageView imageView;
@@ -45,7 +46,7 @@ public final class PaymentPodViewerActivity extends Activity {
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
-        String recordId = getIntent().getStringExtra(EXTRA_RECORD_ID);
+        recordId = getIntent().getStringExtra(EXTRA_RECORD_ID);
         JSONObject record = PaymentTrackingStore.findRecord(this, recordId);
         if (record == null) {
             Toast.makeText(this, "Không tìm thấy khoản chuyển khoản", Toast.LENGTH_SHORT).show();
@@ -198,8 +199,25 @@ public final class PaymentPodViewerActivity extends Activity {
         imageExecutor.execute(() -> {
             try {
                 PaymentReceiptImageExporter.save(this, sourcePath, orderCode);
+                boolean markedDone = false;
+                if (recordId != null && !recordId.isEmpty()) {
+                    JSONObject record = PaymentTrackingStore.findRecord(this, recordId);
+                    if (record != null && "received".equals(record.optString("status"))) {
+                        PaymentTrackingStore.setStatus(this, recordId, "done");
+                        PaymentTrackingEventBus.notifyRecordsChanged();
+                        FloatingWindowService.refreshPaymentQueueIfVisible();
+                        markedDone = true;
+                    }
+                }
+
+                final boolean isDoneNow = markedDone;
                 runOnUiThread(() -> Toast.makeText(
-                    this, "Đã lưu ảnh trong Pictures/POD", Toast.LENGTH_LONG).show());
+                    this,
+                    isDoneNow
+                        ? "Đã lưu ảnh trong Pictures/POD và chuyển sang Đã xong (Done)"
+                        : "Đã lưu ảnh trong Pictures/POD",
+                    Toast.LENGTH_LONG
+                ).show());
             } catch (Exception error) {
                 runOnUiThread(() -> Toast.makeText(
                     this,
