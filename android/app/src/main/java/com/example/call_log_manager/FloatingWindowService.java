@@ -48,7 +48,9 @@ import android.util.Log;
 import android.app.AlertDialog;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.text.Editable;
 import android.text.TextUtils;
+import android.text.TextWatcher;
 import android.view.ContextThemeWrapper;
 
 import java.text.Normalizer;
@@ -556,8 +558,9 @@ public class FloatingWindowService extends Service {
             holder.callId = data.id;
             holder.rawPhone = data.rawPhone;
             holder.displayText = data.displayText;
+            boolean hasName = data.displayText != null && data.displayText.contains("(") && data.displayText.contains(")");
             holder.phoneView.setText(data.displayText != null ? data.displayText : "...");
-            holder.phoneView.setTextColor(0xFF90CAF9);
+            holder.phoneView.setTextColor(hasName ? 0xFFFFFFFF : 0xFF90CAF9);
             holder.phoneView.setContentDescription("Chạm để mở Zalo theo số " + data.rawPhone);
             holder.phoneView.setOnClickListener(v -> openZalo(holder.rawPhone));
             holder.durationView.setVisibility(View.GONE);
@@ -576,8 +579,9 @@ public class FloatingWindowService extends Service {
             Button smsButton = itemView.findViewById(R.id.item_sms_button);
             Button updateButton = itemView.findViewById(R.id.item_update_button);
 
+            boolean hasName = data.displayText != null && data.displayText.contains("(") && data.displayText.contains(")");
             phoneView.setText(data.displayText != null ? data.displayText : "...");
-            phoneView.setTextColor(0xFF90CAF9);
+            phoneView.setTextColor(hasName ? 0xFFFFFFFF : 0xFF90CAF9);
             durationView.setVisibility(View.GONE);
 
             CallItemHolder holder = new CallItemHolder();
@@ -778,6 +782,48 @@ public class FloatingWindowService extends Service {
         }
     }
 
+    private void updateBubbleBadge() {
+        if (floatingView == null || !bubbleMode) return;
+        TextView badgeView = floatingView.findViewById(R.id.bubble_badge);
+        if (badgeView == null) return;
+
+        backgroundExecutor.execute(() -> {
+            try {
+                JSONArray records = PaymentTrackingStore.getRecords(this);
+                int pendingCount = 0;
+                for (int i = 0; i < records.length(); i++) {
+                    JSONObject r = records.optJSONObject(i);
+                    if (r == null) continue;
+                    String status = r.optString("status");
+                    if ("done".equals(status)) continue;
+                    boolean received = "received".equals(status) || r.optBoolean("received", false);
+                    if (!received) {
+                        String channel = r.optString("channel", "sms");
+                        String smsStatus = r.optString("smsStatus");
+                        if ("sms".equals(channel) && !"sent".equals(smsStatus) && !"simulated".equals(smsStatus)) {
+                            continue;
+                        }
+                        pendingCount++;
+                    }
+                }
+                final int finalCount = pendingCount;
+                mainHandler.post(() -> {
+                    if (floatingView == null || !bubbleMode) return;
+                    TextView badge = floatingView.findViewById(R.id.bubble_badge);
+                    if (badge == null) return;
+                    if (finalCount > 0) {
+                        badge.setVisibility(View.VISIBLE);
+                        badge.setText(finalCount > 9 ? "9+" : String.valueOf(finalCount));
+                    } else {
+                        badge.setVisibility(View.GONE);
+                    }
+                });
+            } catch (Exception e) {
+                Log.e(TAG, "Error updating bubble badge", e);
+            }
+        });
+    }
+
     private void showFloatingBubble() {
         if (!canDrawOverlay()) return;
         if (floatingView != null && bubbleMode) return;
@@ -799,6 +845,7 @@ public class FloatingWindowService extends Service {
             replaceFloatingView(R.layout.floating_bubble, dp(56), dp(56));
             floatingView.setOnClickListener(v -> showFloatingPanel(false));
             floatingView.setOnTouchListener(new FloatingTouchListener(windowManager, floatingView, this, true));
+            updateBubbleBadge();
         } catch (Exception e) {
             Log.e(TAG, "Error showing floating bubble", e);
             Toast.makeText(this, "Cannot show floating bubble", Toast.LENGTH_SHORT).show();
@@ -849,6 +896,23 @@ public class FloatingWindowService extends Service {
         smsInputContainer = floatingView.findViewById(R.id.sms_input_container);
         smsQuickNotesContainer = floatingView.findViewById(R.id.sms_quick_notes_container);
         amountInput = floatingView.findViewById(R.id.amount_input);
+        TextView clearAmountButton = floatingView.findViewById(R.id.clear_amount_button);
+        if (clearAmountButton != null && amountInput != null) {
+            clearAmountButton.setOnClickListener(v -> {
+                amountInput.setText("");
+                amountInput.requestFocus();
+            });
+            amountInput.addTextChangedListener(new TextWatcher() {
+                @Override
+                public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+                @Override
+                public void onTextChanged(CharSequence s, int start, int before, int count) {
+                    clearAmountButton.setVisibility(s != null && s.length() > 0 ? View.VISIBLE : View.GONE);
+                }
+                @Override
+                public void afterTextChanged(Editable s) {}
+            });
+        }
         sendSmsButton = floatingView.findViewById(R.id.send_sms_button);
         sendZaloButton = floatingView.findViewById(R.id.send_zalo_button);
         cancelSmsButton = floatingView.findViewById(R.id.cancel_sms_button);
@@ -1065,33 +1129,96 @@ public class FloatingWindowService extends Service {
         boolean simulated = "simulated".equals(record.optString("smsStatus"));
         boolean zalo = "zalo".equals(record.optString("channel", "sms"));
         String deliveryStatus = record.optString("deliveryStatus", "");
+        boolean isZero = "0".equals(amount) || "0đ".equalsIgnoreCase(amount) || "0d".equalsIgnoreCase(amount);
 
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.VERTICAL);
-        row.setPadding(dp(6), dp(4), dp(6), dp(4));
+        row.setPadding(dp(8), dp(6), dp(8), dp(6));
+
+        // Soft pastel card background with border stroke & rounded corners
+        GradientDrawable cardGd = new GradientDrawable();
+        cardGd.setCornerRadius(dp(9));
+        int bgColor;
+        int strokeColor;
+        if (received) {
+            bgColor = 0xFFE8F5E9; // Light pastel green
+            strokeColor = 0xFFA5D6A7;
+        } else if (simulated) {
+            bgColor = 0xFFFBE9E7; // Light pastel peach/orange
+            strokeColor = 0xFFFFCCBC;
+        } else if (customerReplied) {
+            bgColor = 0xFFE1F5FE; // Light pastel blue
+            strokeColor = 0xFF81D4FA;
+        } else {
+            bgColor = 0xFFFFF8E1; // Light pastel amber/cream
+            strokeColor = 0xFFFFE082;
+        }
+        cardGd.setColor(bgColor);
+        cardGd.setStroke(dp(1), strokeColor);
+        row.setBackground(cardGd);
+
+        // Header Row: [Channel Badge] + [0đ Badge] + Order Code / Status
+        LinearLayout headerRow = new LinearLayout(this);
+        headerRow.setOrientation(LinearLayout.HORIZONTAL);
+        headerRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        // Mini channel badge
+        TextView channelBadge = new TextView(this);
+        channelBadge.setText(zalo ? "Zalo" : "SMS");
+        channelBadge.setTextSize(9);
+        channelBadge.setTypeface(null, Typeface.BOLD);
+        channelBadge.setTextColor(zalo ? 0xFF1565C0 : 0xFF37474F);
+        GradientDrawable channelBadgeGd = new GradientDrawable();
+        channelBadgeGd.setColor(zalo ? 0xFFBBDEFB : 0xFFCFD8DC);
+        channelBadgeGd.setCornerRadius(dp(4));
+        channelBadge.setBackground(channelBadgeGd);
+        channelBadge.setPadding(dp(4), dp(1), dp(4), dp(1));
+        headerRow.addView(channelBadge);
+
+        if (isZero) {
+            TextView zeroBadge = new TextView(this);
+            zeroBadge.setText("0đ");
+            zeroBadge.setTextSize(9);
+            zeroBadge.setTypeface(null, Typeface.BOLD);
+            zeroBadge.setTextColor(0xFF4A148C);
+            GradientDrawable zeroBadgeGd = new GradientDrawable();
+            zeroBadgeGd.setColor(0xFFE1BEE7);
+            zeroBadgeGd.setCornerRadius(dp(4));
+            zeroBadge.setBackground(zeroBadgeGd);
+            zeroBadge.setPadding(dp(4), dp(1), dp(4), dp(1));
+            LinearLayout.LayoutParams zeroParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            );
+            zeroParams.setMarginStart(dp(4));
+            headerRow.addView(zeroBadge, zeroParams);
+        }
 
         TextView orderView = new TextView(this);
-        orderView.setText((zalo ? "Zalo · " : (simulated ? "SMS ảo · " : (customerReplied ? "✉ Có phản hồi · " : "")))
-            + (orderCode.isEmpty() ? "Chưa quét mã đơn" : "Đơn " + orderCode));
+        String headerTitle;
         if (zalo) {
             String statusText = "sent_confirmed".equals(deliveryStatus)
                 ? "đã gửi"
                 : ("draft_ready".equals(deliveryStatus)
-                    ? "QR đã sao chép · chờ gửi"
+                    ? "chờ gửi"
                     : ("chat_opened".equals(deliveryStatus)
-                        ? "đã mở chat · chưa có QR"
+                        ? "đã mở chat"
                         : ("awaiting_scan".equals(deliveryStatus)
-                            ? "chờ quét đơn"
-                            : "chờ xác nhận gửi")));
-            orderView.setText("Zalo · " + statusText + " · "
-                + (orderCode.isEmpty() ? "Chưa quét mã đơn" : "Đơn " + orderCode));
+                            ? "chờ quét"
+                            : "chờ xác nhận")));
+            headerTitle = statusText + " · " + (orderCode.isEmpty() ? "Chưa quét mã" : "Đơn " + orderCode);
+        } else {
+            headerTitle = (simulated ? "SMS ảo · " : (customerReplied ? "✉ Phản hồi · " : ""))
+                + (orderCode.isEmpty() ? "Chưa quét mã" : "Đơn " + orderCode);
         }
-        orderView.setTextColor(0xFF222222);
-        orderView.setTextSize(12);
+        orderView.setText(headerTitle);
+        orderView.setTextColor(0xFF263238);
+        orderView.setTextSize(11);
         orderView.setSingleLine(true);
         orderView.setEllipsize(android.text.TextUtils.TruncateAt.END);
         if (!orderCode.isEmpty()) {
             orderView.setTextColor(0xFF1565C0);
+            orderView.setTypeface(null, Typeface.BOLD);
             orderView.setPaintFlags(
                 orderView.getPaintFlags() | android.graphics.Paint.UNDERLINE_TEXT_FLAG
             );
@@ -1103,14 +1230,24 @@ public class FloatingWindowService extends Service {
                 return true;
             });
         }
+        LinearLayout.LayoutParams orderParams = new LinearLayout.LayoutParams(
+            0,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            1f
+        );
+        orderParams.setMarginStart(dp(6));
+        headerRow.addView(orderView, orderParams);
+        row.addView(headerRow);
 
+        // Action Row: SĐT + Số tiền + Nút Pill ("✓ Nhận" / "POD")
         LinearLayout actionRow = new LinearLayout(this);
         actionRow.setOrientation(LinearLayout.HORIZONTAL);
         actionRow.setGravity(Gravity.CENTER_VERTICAL);
+        actionRow.setPadding(0, dp(4), 0, 0);
 
         TextView detailsView = new TextView(this);
         detailsView.setText(lastFour.isEmpty() ? "Không rõ SĐT" : "••" + lastFour);
-        detailsView.setTextColor(0xFF555555);
+        detailsView.setTextColor(0xFF546E7A);
         detailsView.setTextSize(11);
         detailsView.setSingleLine(true);
         detailsView.setEllipsize(android.text.TextUtils.TruncateAt.END);
@@ -1130,24 +1267,32 @@ public class FloatingWindowService extends Service {
         }
 
         TextView amountView = new TextView(this);
-        amountView.setText(amount.isEmpty() ? "" : amount + "đ");
-        amountView.setTextColor(0xFF555555);
-        amountView.setTextSize(11);
+        amountView.setText(amount.isEmpty() ? "" : (isZero ? "0đ" : amount + "đ"));
+        amountView.setTextColor(isZero ? 0xFF4A148C : 0xFFC2185B);
+        amountView.setTextSize(12);
+        amountView.setTypeface(null, Typeface.BOLD);
         amountView.setGravity(Gravity.CENTER_VERTICAL);
         amountView.setSingleLine(true);
         amountView.setEllipsize(android.text.TextUtils.TruncateAt.END);
 
+        // Modern Pill Button
         Button receivedButton = new Button(this);
         receivedButton.setText(received ? "POD" : "✓ Nhận");
-        receivedButton.setTextSize(10);
-        receivedButton.setContentDescription(received
-            ? "Xem ảnh POD của đơn hàng"
-            : "Đánh dấu khoản chuyển khoản đã nhận");
+        receivedButton.setTextSize(11);
+        receivedButton.setTextColor(0xFFFFFFFF);
+        receivedButton.setTypeface(null, Typeface.BOLD);
+        GradientDrawable pillGd = new GradientDrawable();
+        pillGd.setCornerRadius(dp(12));
+        pillGd.setColor(received ? 0xFF1565C0 : 0xFF2E7D32);
+        receivedButton.setBackground(pillGd);
         receivedButton.setMinWidth(0);
         receivedButton.setMinimumWidth(0);
         receivedButton.setMinHeight(0);
         receivedButton.setMinimumHeight(0);
-        receivedButton.setPadding(dp(6), 0, dp(6), 0);
+        receivedButton.setPadding(dp(10), dp(4), dp(10), dp(4));
+        receivedButton.setContentDescription(received
+            ? "Xem ảnh POD của đơn hàng"
+            : "Đánh dấu khoản chuyển khoản đã nhận");
         receivedButton.setOnClickListener(v -> {
             if (received) {
                 openPaymentPod(id, imagePath);
@@ -1157,27 +1302,21 @@ public class FloatingWindowService extends Service {
             }
         });
 
-        actionRow.addView(detailsView, new LinearLayout.LayoutParams(0, dp(36), 1f));
+        actionRow.addView(detailsView, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         if (!amount.isEmpty()) {
             LinearLayout.LayoutParams amountParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
-                dp(36)
+                LinearLayout.LayoutParams.WRAP_CONTENT
             );
-            amountParams.setMargins(dp(4), 0, dp(4), 0);
+            amountParams.setMargins(dp(6), 0, dp(6), 0);
             actionRow.addView(amountView, amountParams);
         }
         actionRow.addView(receivedButton, new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT,
-            dp(36)
-        ));
-        row.addView(orderView, new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         ));
-        row.addView(actionRow, new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            dp(30)
-        ));
+        row.addView(actionRow);
+
         if (received && customerReplied && !replyMessage.isEmpty()) {
             TextView replyView = new TextView(this);
             replyView.setText("Khách: " + replyMessage);
@@ -1185,22 +1324,25 @@ public class FloatingWindowService extends Service {
             replyView.setTextSize(10);
             replyView.setMaxLines(2);
             replyView.setEllipsize(android.text.TextUtils.TruncateAt.END);
-            replyView.setPadding(dp(2), dp(3), dp(2), dp(2));
+            replyView.setPadding(dp(4), dp(3), dp(4), dp(2));
+            GradientDrawable replyGd = new GradientDrawable();
+            replyGd.setColor(0x18000000);
+            replyGd.setCornerRadius(dp(4));
+            replyView.setBackground(replyGd);
             replyView.setContentDescription("Nội dung khách nhắn: " + replyMessage);
-            row.addView(replyView, new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams replyParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ));
+            );
+            replyParams.setMargins(0, dp(4), 0, 0);
+            row.addView(replyView, replyParams);
         }
-        row.setBackgroundColor(received
-            ? 0xFFE8F5E9
-            : (simulated ? 0xFFFFF3E0 : (customerReplied ? 0xFFE3F2FD : 0xFFF4F4F4)));
 
         LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         );
-        rowParams.setMargins(0, 0, 0, dp(3));
+        rowParams.setMargins(0, 0, 0, dp(5));
         callsContainer.addView(row, rowParams);
     }
 
@@ -1360,6 +1502,8 @@ public class FloatingWindowService extends Service {
             amountInput.setText("");
             amountInput.requestFocus();
         }
+        TextView clearBtn = floatingView != null ? floatingView.findViewById(R.id.clear_amount_button) : null;
+        if (clearBtn != null) clearBtn.setVisibility(View.GONE);
 
         loadAndRenderQuickNotes();
 
@@ -1389,6 +1533,8 @@ public class FloatingWindowService extends Service {
             }
             amountInput.setText("");
         }
+        TextView clearBtnHide = floatingView != null ? floatingView.findViewById(R.id.clear_amount_button) : null;
+        if (clearBtnHide != null) clearBtnHide.setVisibility(View.GONE);
 
         if (smsInputContainer != null) {
             smsInputContainer.setVisibility(View.GONE);
@@ -2072,6 +2218,7 @@ public class FloatingWindowService extends Service {
         if (service == null) return;
         service.mainHandler.post(() -> {
             if (service.paymentQueueMode) service.renderPaymentQueue();
+            if (service.bubbleMode) service.updateBubbleBadge();
         });
     }
 

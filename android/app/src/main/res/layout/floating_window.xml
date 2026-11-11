@@ -179,20 +179,37 @@
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
-            <EditText
-                android:id="@+id/amount_input"
+            <RelativeLayout
                 android:layout_width="0dp"
                 android:layout_height="40dp"
-                android:layout_weight="1"
-                android:background="@drawable/input_background"
-                android:hint="1923 = 1.923.000đ hoặc 0"
-                android:inputType="number"
-                android:paddingStart="10dp"
-                android:paddingEnd="6dp"
-                android:singleLine="true"
-                android:textColor="#FFFFFFFF"
-                android:textColorHint="#80FFFFFF"
-                android:textSize="13sp" />
+                android:layout_weight="1">
+
+                <EditText
+                    android:id="@+id/amount_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="@drawable/input_background"
+                    android:hint="1923 = 1.923.000đ hoặc 0"
+                    android:inputType="number"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="32dp"
+                    android:singleLine="true"
+                    android:textColor="#FFFFFFFF"
+                    android:textColorHint="#80FFFFFF"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:id="@+id/clear_amount_button"
+                    android:layout_width="32dp"
+                    android:layout_height="match_parent"
+                    android:layout_alignParentEnd="true"
+                    android:gravity="center"
+                    android:text="✕"
+                    android:textColor="#B0FFFFFF"
+                    android:textSize="14sp"
+                    android:visibility="gone"
+                    android:contentDescription="Xóa nhanh số tiền" />
+            </RelativeLayout>
 
             <Button
                 android:id="@+id/send_sms_button"

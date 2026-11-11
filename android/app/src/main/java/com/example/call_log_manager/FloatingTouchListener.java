@@ -94,24 +94,59 @@ public class FloatingTouchListener implements View.OnTouchListener {
             int viewWidth = floatingView.getWidth();
             if (viewWidth <= 0) viewWidth = 200; // Fallback nếu view chưa đo xong
 
+            int padding = dp(6);
+            int targetX;
             if (params.x + (viewWidth / 2) < screenWidth / 2) {
-                params.x = 0;
+                targetX = padding;
             } else {
-                params.x = Math.max(0, screenWidth - viewWidth);
+                targetX = Math.max(0, screenWidth - viewWidth - padding);
             }
 
             int viewHeight = floatingView.getHeight();
             if (viewHeight <= 0) viewHeight = 56;
             params.y = Math.max(0, Math.min(params.y, Math.max(0, getScreenHeight() - viewHeight)));
 
-            windowManager.updateViewLayout(floatingView, params);
-            context.getSharedPreferences("floating_window_state", Context.MODE_PRIVATE)
-                .edit()
-                .putInt("floating_x", params.x)
-                .putInt("floating_y", params.y)
-                .apply();
+            int startX = params.x;
+            if (Math.abs(startX - targetX) > 5) {
+                android.animation.ValueAnimator animator = android.animation.ValueAnimator.ofInt(startX, targetX);
+                animator.setDuration(160);
+                animator.setInterpolator(new android.view.animation.DecelerateInterpolator());
+                animator.addUpdateListener(animation -> {
+                    try {
+                        if (floatingView != null && windowManager != null) {
+                            params.x = (int) animation.getAnimatedValue();
+                            windowManager.updateViewLayout(floatingView, params);
+                        }
+                    } catch (Exception ignored) {}
+                });
+                animator.addListener(new android.animation.AnimatorListenerAdapter() {
+                    @Override
+                    public void onAnimationEnd(android.animation.Animator animation) {
+                        try {
+                            context.getSharedPreferences("floating_window_state", Context.MODE_PRIVATE)
+                                .edit()
+                                .putInt("floating_x", targetX)
+                                .putInt("floating_y", params.y)
+                                .apply();
+                        } catch (Exception ignored) {}
+                    }
+                });
+                animator.start();
+            } else {
+                params.x = targetX;
+                windowManager.updateViewLayout(floatingView, params);
+                context.getSharedPreferences("floating_window_state", Context.MODE_PRIVATE)
+                    .edit()
+                    .putInt("floating_x", targetX)
+                    .putInt("floating_y", params.y)
+                    .apply();
+            }
         } catch (Exception ignored) {
         }
+    }
+
+    private int dp(int value) {
+        return Math.round(value * context.getResources().getDisplayMetrics().density);
     }
 
     private int getScreenWidth() {
