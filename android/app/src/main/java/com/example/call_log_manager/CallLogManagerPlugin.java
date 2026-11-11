@@ -24,6 +24,7 @@ import android.provider.Telephony;
 import android.util.Log;
 
 import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import androidx.core.app.ActivityCompat;
@@ -520,33 +521,79 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
     private void getSmsQuickNotes(Result result) {
         android.content.SharedPreferences prefs = context.getSharedPreferences("floating_window_state", Context.MODE_PRIVATE);
         String json = prefs.getString("sms_quick_notes", null);
-        List<String> list = new ArrayList<>();
+        List<Map<String, String>> list = new ArrayList<>();
         if (json != null && !json.trim().isEmpty()) {
             try {
                 JSONArray arr = new JSONArray(json);
                 for (int i = 0; i < arr.length(); i++) {
-                    String item = arr.optString(i, "").trim();
-                    if (!item.isEmpty()) list.add(item);
+                    Object obj = arr.opt(i);
+                    if (obj instanceof JSONObject) {
+                        JSONObject o = (JSONObject) obj;
+                        Map<String, String> item = new HashMap<>();
+                        item.put("label", o.optString("label", ""));
+                        item.put("content", o.optString("content", ""));
+                        list.add(item);
+                    } else if (obj instanceof String) {
+                        String s = ((String) obj).trim();
+                        if (!s.isEmpty()) {
+                            Map<String, String> item = new HashMap<>();
+                            item.put("label", s);
+                            item.put("content", s);
+                            list.add(item);
+                        }
+                    }
                 }
             } catch (Exception e) {
                 Log.e("CallLogManager", "Loi doc sms_quick_notes", e);
             }
         }
         if (list.isEmpty()) {
-            list.add("gui hang tai bao ve");
-            list.add("gui hang co ban nuoc");
-            list.add("don shopee 0d gui trong thung EMG");
+            Map<String, String> m1 = new HashMap<>();
+            m1.put("label", "Bảo vệ");
+            m1.put("content", "gui hang tai bao ve");
+            list.add(m1);
+
+            Map<String, String> m2 = new HashMap<>();
+            m2.put("label", "Cô nước");
+            m2.put("content", "gui hang co ban nuoc");
+            list.add(m2);
+
+            Map<String, String> m3 = new HashMap<>();
+            m3.put("label", "Shopee 0đ");
+            m3.put("content", "don shopee 0d gui trong thung EMG");
+            list.add(m3);
         }
         result.success(list);
     }
 
     private void saveSmsQuickNotes(MethodCall call, Result result) {
-        List<String> notes = call.argument("notes");
+        List<?> notes = call.argument("notes");
         if (notes != null) {
             JSONArray arr = new JSONArray();
-            for (String note : notes) {
-                if (note != null && !note.trim().isEmpty() && arr.length() < 6) {
-                    arr.put(note.trim());
+            for (Object item : notes) {
+                if (arr.length() >= 6) break;
+                if (item instanceof Map) {
+                    Map<?, ?> map = (Map<?, ?>) item;
+                    String label = map.get("label") != null ? map.get("label").toString().trim() : "";
+                    String content = map.get("content") != null ? map.get("content").toString().trim() : "";
+                    if (!content.isEmpty() || !label.isEmpty()) {
+                        JSONObject obj = new JSONObject();
+                        try {
+                            obj.put("label", label.isEmpty() ? content : label);
+                            obj.put("content", content.isEmpty() ? label : content);
+                            arr.put(obj);
+                        } catch (JSONException ignored) {}
+                    }
+                } else if (item instanceof String) {
+                    String str = ((String) item).trim();
+                    if (!str.isEmpty()) {
+                        JSONObject obj = new JSONObject();
+                        try {
+                            obj.put("label", str);
+                            obj.put("content", str);
+                            arr.put(obj);
+                        } catch (JSONException ignored) {}
+                    }
                 }
             }
             android.content.SharedPreferences prefs = context.getSharedPreferences("floating_window_state", Context.MODE_PRIVATE);

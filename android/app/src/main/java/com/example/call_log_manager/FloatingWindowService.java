@@ -101,7 +101,22 @@ public class FloatingWindowService extends Service {
     private LinearLayout smsInputContainer;
     private LinearLayout smsQuickNotesContainer;
     private int selectedQuickNoteIndex = -1;
-    private final List<String> currentQuickNotes = new ArrayList<>();
+
+    private static class SmsQuickNoteItem {
+        final String label;
+        final String content;
+
+        SmsQuickNoteItem(String label, String content) {
+            this.label = label != null ? label.trim() : "";
+            this.content = content != null ? content.trim() : "";
+        }
+
+        String getDisplayLabel() {
+            return !label.isEmpty() ? label : content;
+        }
+    }
+
+    private final List<SmsQuickNoteItem> currentQuickNotes = new ArrayList<>();
     private EditText amountInput;
     private Button sendSmsButton, sendZaloButton, cancelSmsButton;
 
@@ -1385,24 +1400,36 @@ public class FloatingWindowService extends Service {
             try {
                 JSONArray arr = new JSONArray(json);
                 for (int i = 0; i < arr.length(); i++) {
-                    String item = arr.optString(i, "").trim();
-                    if (!item.isEmpty()) currentQuickNotes.add(item);
+                    Object obj = arr.opt(i);
+                    if (obj instanceof JSONObject) {
+                        JSONObject o = (JSONObject) obj;
+                        String l = o.optString("label", "").trim();
+                        String c = o.optString("content", "").trim();
+                        if (!l.isEmpty() || !c.isEmpty()) {
+                            currentQuickNotes.add(new SmsQuickNoteItem(l, c));
+                        }
+                    } else if (obj instanceof String) {
+                        String s = ((String) obj).trim();
+                        if (!s.isEmpty()) {
+                            currentQuickNotes.add(new SmsQuickNoteItem(s, s));
+                        }
+                    }
                 }
             } catch (Exception e) {
                 Log.e(TAG, "Loi doc sms_quick_notes", e);
             }
         }
         if (currentQuickNotes.isEmpty()) {
-            currentQuickNotes.add("gui hang tai bao ve");
-            currentQuickNotes.add("gui hang co ban nuoc");
-            currentQuickNotes.add("don shopee 0d gui trong thung EMG");
+            currentQuickNotes.add(new SmsQuickNoteItem("Bảo vệ", "gui hang tai bao ve"));
+            currentQuickNotes.add(new SmsQuickNoteItem("Cô nước", "gui hang co ban nuoc"));
+            currentQuickNotes.add(new SmsQuickNoteItem("Shopee 0đ", "don shopee 0d gui trong thung EMG"));
         }
 
         for (int i = 0; i < currentQuickNotes.size() && i < 6; i++) {
             final int index = i;
-            String note = currentQuickNotes.get(i);
+            SmsQuickNoteItem item = currentQuickNotes.get(i);
             TextView btn = new TextView(this);
-            btn.setText(note);
+            btn.setText(item.getDisplayLabel());
             btn.setTextSize(11);
             btn.setMaxLines(1);
             btn.setEllipsize(TextUtils.TruncateAt.END);
@@ -1423,9 +1450,9 @@ public class FloatingWindowService extends Service {
                     selectedQuickNoteIndex = -1;
                 } else {
                     selectedQuickNoteIndex = index;
-                    String selNote = currentQuickNotes.get(index);
-                    String unaccented = removeAccents(selNote).toLowerCase(Locale.ROOT);
-                    if ((unaccented.contains("0d") || unaccented.contains("0 vnd") || unaccented.contains("0 d"))
+                    SmsQuickNoteItem sel = currentQuickNotes.get(index);
+                    String check0 = removeAccents(sel.label + " " + sel.content).toLowerCase(Locale.ROOT);
+                    if ((check0.contains("0d") || check0.contains("0 vnd") || check0.contains("0 d"))
                             && amountInput != null && amountInput.getText().toString().trim().isEmpty()) {
                         amountInput.setText("0");
                     }
@@ -1487,17 +1514,20 @@ public class FloatingWindowService extends Service {
             enteredAmount = amountInput.getText().toString().trim();
         }
 
-        String selectedNote = (selectedQuickNoteIndex >= 0 && selectedQuickNoteIndex < currentQuickNotes.size())
-            ? currentQuickNotes.get(selectedQuickNoteIndex)
-            : "";
+        String selectedNote = "";
+        String noteLowerCheck = "";
+        if (selectedQuickNoteIndex >= 0 && selectedQuickNoteIndex < currentQuickNotes.size()) {
+            SmsQuickNoteItem sel = currentQuickNotes.get(selectedQuickNoteIndex);
+            selectedNote = sel.content.isEmpty() ? sel.label : sel.content;
+            noteLowerCheck = removeAccents(sel.label + " " + sel.content).toLowerCase(Locale.ROOT);
+        }
 
         boolean isZeroOrder = "0".equals(enteredAmount) || "00".equals(enteredAmount)
             || "0đ".equalsIgnoreCase(enteredAmount) || "0d".equalsIgnoreCase(enteredAmount)
             || "0vnd".equalsIgnoreCase(enteredAmount);
 
-        if (enteredAmount.isEmpty() && !selectedNote.isEmpty()) {
-            String noteLower = removeAccents(selectedNote).toLowerCase(Locale.ROOT);
-            if (noteLower.contains("0d") || noteLower.contains("0 vnd") || noteLower.contains("0 d")) {
+        if (enteredAmount.isEmpty() && !noteLowerCheck.isEmpty()) {
+            if (noteLowerCheck.contains("0d") || noteLowerCheck.contains("0 vnd") || noteLowerCheck.contains("0 d")) {
                 isZeroOrder = true;
                 enteredAmount = "0";
             }

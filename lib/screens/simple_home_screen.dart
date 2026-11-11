@@ -440,6 +440,39 @@ class _SimpleHomeScreenState extends State<SimpleHomeScreen>
   }
 }
 
+class SmsQuickNote {
+  String label;
+  String content;
+
+  SmsQuickNote({required this.label, required this.content});
+
+  String get displayLabel {
+    final trimmedLabel = label.trim();
+    if (trimmedLabel.isNotEmpty) return trimmedLabel;
+    return content.trim();
+  }
+
+  Map<String, String> toJson() => {
+        'label': label.trim(),
+        'content': content.trim(),
+      };
+
+  factory SmsQuickNote.fromDynamic(dynamic item) {
+    if (item is Map) {
+      final l = (item['label'] ?? '').toString().trim();
+      final c = (item['content'] ?? '').toString().trim();
+      return SmsQuickNote(
+        label: l.isNotEmpty ? l : c,
+        content: c.isNotEmpty ? c : l,
+      );
+    } else if (item is String) {
+      final s = item.trim();
+      return SmsQuickNote(label: s, content: s);
+    }
+    return SmsQuickNote(label: '', content: '');
+  }
+}
+
 class _SmsTemplateConfigWidget extends StatefulWidget {
   const _SmsTemplateConfigWidget();
 
@@ -455,7 +488,7 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
   static const _pendingLicenseSyncWindow = Duration(days: 3);
   final TextEditingController _controller = TextEditingController();
   final LicenseApiService _licenseApi = LicenseApiService();
-  List<String> _quickNotes = [];
+  List<SmsQuickNote> _quickNotes = [];
   bool _hasSmsPermission = false;
   bool _hasIncomingSmsPermission = false;
   bool _isAutoFakeSmsIntent = false;
@@ -509,11 +542,17 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
       final List<dynamic>? rawQuickNotes =
           await channel.invokeMethod<List<dynamic>>('getSmsQuickNotes');
       final quickNotes = rawQuickNotes != null
-          ? rawQuickNotes.map((e) => e.toString()).toList()
-          : <String>[
-              'gui hang tai bao ve',
-              'gui hang co ban nuoc',
-              'don shopee 0d gui trong thung EMG',
+          ? rawQuickNotes
+              .map((e) => SmsQuickNote.fromDynamic(e))
+              .where((e) => e.displayLabel.isNotEmpty)
+              .toList()
+          : <SmsQuickNote>[
+              SmsQuickNote(label: 'Bảo vệ', content: 'gui hang tai bao ve'),
+              SmsQuickNote(label: 'Cô nước', content: 'gui hang co ban nuoc'),
+              SmsQuickNote(
+                label: 'Shopee 0đ',
+                content: 'don shopee 0d gui trong thung EMG',
+              ),
             ];
       final bool hasPerm = await channel.invokeMethod('hasSmsPermission');
       final bool hasIncomingPerm = await channel.invokeMethod(
@@ -625,7 +664,7 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
         'template': _controller.text,
       });
       await channel.invokeMethod('saveSmsQuickNotes', {
-        'notes': _quickNotes,
+        'notes': _quickNotes.map((e) => e.toJson()).toList(),
       });
       if (mounted && showFeedback) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -650,34 +689,52 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
 
   void _showAddEditQuickNoteDialog({int? index}) {
     final isEditing = index != null && index >= 0 && index < _quickNotes.length;
-    final textController = TextEditingController(
-      text: isEditing ? _quickNotes[index] : '',
+    final existingNote = isEditing ? _quickNotes[index] : null;
+    final labelController = TextEditingController(
+      text: existingNote?.label ?? '',
+    );
+    final contentController = TextEditingController(
+      text: existingNote?.content ?? '',
     );
 
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(isEditing ? 'Sửa nút ghi chú' : 'Thêm nút ghi chú (Tối đa 6)'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TextField(
-              controller: textController,
-              autofocus: true,
-              decoration: const InputDecoration(
-                hintText: 'VD: gui hang tai bao ve',
-                labelText: 'Nội dung ghi chú',
-                border: OutlineInputBorder(),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: labelController,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  hintText: 'VD: Bảo vệ, Cô nước, Shopee 0đ',
+                  labelText: 'Tên nút / Viết tắt (Hiển thị ngắn gọn)',
+                  border: OutlineInputBorder(),
+                  helperText: 'Tên xuất hiện trên nút chip ở bong bóng nổi.',
+                ),
+                maxLength: 20,
               ),
-              maxLength: 60,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Gợi ý: Nhập không dấu để tối đa hoá độ dài tin nhắn GSM (160 ký tự).',
-              style: TextStyle(fontSize: 11, color: Colors.grey[600]),
-            ),
-          ],
+              const SizedBox(height: 12),
+              TextField(
+                controller: contentController,
+                decoration: const InputDecoration(
+                  hintText: 'VD: gui hang tai bao ve',
+                  labelText: 'Nội dung SMS đầy đủ (Gửi cho khách)',
+                  border: OutlineInputBorder(),
+                  helperText: 'Nội dung thực tế được ghép vào tin nhắn SMS.',
+                ),
+                maxLength: 80,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Mẹo: Viết tắt giúp nút nhỏ gọn, dễ bấm khi thao tác trên đường.',
+                style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(
@@ -686,20 +743,24 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
           ),
           ElevatedButton(
             onPressed: () {
-              final text = textController.text.trim();
-              if (text.isNotEmpty) {
-                setState(() {
-                  if (isEditing) {
-                    _quickNotes[index] = text;
-                  } else {
-                    if (_quickNotes.length < 6) {
-                      _quickNotes.add(text);
-                    }
+              var label = labelController.text.trim();
+              var content = contentController.text.trim();
+              if (label.isEmpty && content.isEmpty) return;
+              if (label.isEmpty) label = content;
+              if (content.isEmpty) content = label;
+
+              final item = SmsQuickNote(label: label, content: content);
+              setState(() {
+                if (isEditing) {
+                  _quickNotes[index] = item;
+                } else {
+                  if (_quickNotes.length < 6) {
+                    _quickNotes.add(item);
                   }
-                });
-                Navigator.of(ctx).pop();
-                _saveTemplate(showFeedback: false);
-              }
+                }
+              });
+              Navigator.of(ctx).pop();
+              _saveTemplate(showFeedback: false);
             },
             child: Text(isEditing ? 'Lưu' : 'Thêm'),
           ),
@@ -1509,21 +1570,50 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
               runSpacing: 6,
               children: List.generate(_quickNotes.length, (idx) {
                 final note = _quickNotes[idx];
-                return InputChip(
-                  avatar: CircleAvatar(
-                    backgroundColor: Colors.blue[700],
-                    child: Text(
-                      '${idx + 1}',
-                      style: const TextStyle(fontSize: 10, color: Colors.white),
+                final hasDistinctContent = note.label.isNotEmpty &&
+                    note.content.isNotEmpty &&
+                    note.label.trim().toLowerCase() !=
+                        note.content.trim().toLowerCase();
+                return Tooltip(
+                  message: 'SMS gửi đi: "${note.content}"',
+                  child: InputChip(
+                    avatar: CircleAvatar(
+                      backgroundColor: Colors.blue[700],
+                      child: Text(
+                        '${idx + 1}',
+                        style: const TextStyle(fontSize: 10, color: Colors.white),
+                      ),
                     ),
+                    label: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          note.displayLabel,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        if (hasDistinctContent)
+                          Text(
+                            note.content,
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: Colors.blueGrey[800],
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                      ],
+                    ),
+                    onPressed: () => _showAddEditQuickNoteDialog(index: idx),
+                    onDeleted: () => _deleteQuickNote(idx),
+                    deleteIcon: const Icon(Icons.close, size: 16),
+                    deleteButtonTooltipMessage: 'Xóa mẫu này',
+                    backgroundColor: Colors.blue.withValues(alpha: 0.08),
+                    side: BorderSide(color: Colors.blue.withValues(alpha: 0.3)),
                   ),
-                  label: Text(note, style: const TextStyle(fontSize: 12)),
-                  onPressed: () => _showAddEditQuickNoteDialog(index: idx),
-                  onDeleted: () => _deleteQuickNote(idx),
-                  deleteIcon: const Icon(Icons.close, size: 16),
-                  deleteButtonTooltipMessage: 'Xóa mẫu này',
-                  backgroundColor: Colors.blue.withValues(alpha: 0.08),
-                  side: BorderSide(color: Colors.blue.withValues(alpha: 0.3)),
                 );
               }),
             ),
