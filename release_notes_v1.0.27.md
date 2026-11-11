@@ -1,0 +1,10 @@
+- **TimeMark chụp nhiều ảnh liên tục**: Bổ sung lựa chọn chụp nhiều ảnh cùng lúc ngay trên màn hình máy ảnh, hiển thị số ảnh đã chụp và nút hoàn tất `✓ Xong (X)`.
+- **Tính năng Quét Mã Vạch & QR Code**: Quét liên tục thời gian thực bằng CameraX và ML Kit (hỗ trợ QR Code, Code 128, Code 39, EAN-13, EAN-8...), có khung ngắm và đèn Flash.
+- **Quản lý danh sách mã đã quét**: Xem lại danh sách chi tiết, tìm kiếm, lọc theo loại, sao chép toàn bộ danh sách vào bộ nhớ tạm và chia sẻ danh sách trực tiếp qua Zalo, Messenger, Telegram, Ghi chú.
+- **Bong bóng trồi nổi**: Tự động bám mép màn hình mượt mà (Handler Decelerate Interpolation), huy hiệu số đỏ đếm đơn chờ chuyển khoản, icon điện thoại Material sắc nét.
+- **Thẻ đơn hàng popup**: Bo góc pastel 9dp, hiển thị badge [SMS]/[Zalo]/[0đ], nút "✓ Nhận" và "POD" dạng Pill bo tròn 12dp.
+- **Ô nhập tiền popup**: Bổ sung nút xóa nhanh (×) 1 chạm.
+- **Trang chủ App**: Nâng cấp 3 mục thành Dashboard Cards bo góc 14dp phân màu nhận diện (Xanh dương, Xanh lá, Cam).
+- **Cài đặt SMS**: Bổ sung Khung xem trước SMS trực tiếp (Live SMS Preview) kèm bộ đếm ký tự GSM 7-bit thời gian thực (X/160 · Y tin) và các nút bấm thử nghiệm nhanh.
+- **Màn hình đối soát thanh toán**: Thiết kế lại với 3 tab trực quan (Chờ nhận, Đã nhận, Đơn Done); đơn đã tải POD tự động chuyển sang Done và ẩn khỏi popup thao tác nhanh.
+- **Độ mờ linh hoạt**: Cho phép cấu hình riêng biệt độ mờ cho bong bóng nổi và popup thao tác nhanh trong màn hình Cài đặt.

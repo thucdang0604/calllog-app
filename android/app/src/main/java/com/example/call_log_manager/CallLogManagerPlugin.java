@@ -273,6 +273,9 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
             case "openQuickCamera":
                 openQuickCamera(result);
                 break;
+            case "openBarcodeScanner":
+                openBarcodeScanner(result);
+                break;
 
             case "getAutoFakeSmsIntent":
                 getAutoFakeSmsIntent(result);
@@ -508,6 +511,24 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
         }
     }
 
+    private static final int BARCODE_SCAN_REQUEST_CODE = 4501;
+    private Result pendingBarcodeScanResult = null;
+
+    private void openBarcodeScanner(Result result) {
+        if (activity == null) {
+            result.error("NO_ACTIVITY", "Cannot open scanner without foreground activity", null);
+            return;
+        }
+        try {
+            pendingBarcodeScanResult = result;
+            Intent intent = new Intent(activity, BarcodeScanActivity.class);
+            activity.startActivityForResult(intent, BARCODE_SCAN_REQUEST_CODE);
+        } catch (Exception e) {
+            pendingBarcodeScanResult = null;
+            result.error("SCANNER_ERROR", e.getMessage(), null);
+        }
+    }
+
     // ================= SMS & Overlay Handlers =================
 
     private void getSmsTemplate(Result result) {
@@ -671,6 +692,18 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
 
     @Override
     public boolean onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == BARCODE_SCAN_REQUEST_CODE) {
+            Result result = pendingBarcodeScanResult;
+            pendingBarcodeScanResult = null;
+            if (result != null) {
+                if (data != null && data.hasExtra("scanned_codes_json")) {
+                    result.success(data.getStringExtra("scanned_codes_json"));
+                } else {
+                    result.success("[]");
+                }
+            }
+            return true;
+        }
         if (requestCode != EXPORT_PAYMENT_BACKUP_REQUEST_CODE
             && requestCode != IMPORT_PAYMENT_BACKUP_REQUEST_CODE) return false;
         Result result = pendingPaymentBackupResult;

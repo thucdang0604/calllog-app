@@ -12,6 +12,7 @@ import '../widgets/fake_gps_widget.dart';
 import '../widgets/timemark_camera_widget.dart';
 import 'payment_reconciliation_screen.dart';
 import 'payment_account_settings_screen.dart';
+import 'barcode_scanner_screen.dart';
 
 class SimpleHomeScreen extends StatefulWidget {
   const SimpleHomeScreen({super.key});
@@ -374,10 +375,47 @@ class _SimpleHomeScreenState extends State<SimpleHomeScreen>
                       'Vị trí giả lập và TimeMark Camera',
                       style: TextStyle(fontSize: 12),
                     ),
-                    children: const [
-                      FakeGpsWidget(),
-                      TimeMarkCameraWidget(),
-                      SizedBox(height: 8),
+                    children: [
+                      const FakeGpsWidget(),
+                      const TimeMarkCameraWidget(),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                        child: Card(
+                          color: Colors.purple.shade50.withValues(alpha: 0.5),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            side: BorderSide(color: Colors.purple.shade200),
+                          ),
+                          child: ListTile(
+                            leading: Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: Colors.purple.shade100,
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Icon(
+                                Icons.qr_code_scanner,
+                                color: Colors.purple.shade800,
+                              ),
+                            ),
+                            title: const Text(
+                              'Quét Mã Vạch & QR Code',
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                            ),
+                            subtitle: const Text(
+                              'Quét liên tục, xem danh sách, copy & chia sẻ',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => const BarcodeScannerScreen(),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
                     ],
                   ),
                 ),

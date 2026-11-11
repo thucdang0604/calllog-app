@@ -76,7 +76,7 @@ class _TimeMarkCameraWidgetState extends State<TimeMarkCameraWidget> {
             ),
             const SizedBox(height: 6),
             Text(
-              'Chụp ảnh kèm thời gian, tọa độ và mã QR/mã vạch nếu phát hiện được.',
+              'Chụp ảnh kèm thời gian, địa chỉ GPS và mã đơn. Hỗ trợ chụp 1 chạm hoặc chuyển chế độ chụp liên tiếp nhiều ảnh ngay trên máy ảnh.',
               style: TextStyle(fontSize: 12, color: Colors.grey[700]),
             ),
             const SizedBox(height: 12),

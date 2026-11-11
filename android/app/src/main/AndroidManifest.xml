@@ -80,6 +80,12 @@
             android:configChanges="orientation|screenSize|keyboardHidden" />
 
         <activity
+            android:name=".BarcodeScanActivity"
+            android:exported="false"
+            android:theme="@style/QuickCameraTheme"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+
+        <activity
             android:name=".PaymentPodViewerActivity"
             android:exported="false"
             android:theme="@android:style/Theme.Material.Light.NoActionBar"

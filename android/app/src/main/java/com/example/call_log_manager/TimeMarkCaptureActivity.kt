@@ -126,6 +126,8 @@ class TimeMarkCaptureActivity : AppCompatActivity() {
     private lateinit var btnFlash: ImageButton
     private lateinit var btnSwitchCamera: ImageButton
     private lateinit var btnClose: ImageButton
+    private lateinit var btnModeToggle: TextView
+    private lateinit var btnDone: TextView
     private lateinit var flashOverlay: View
     private lateinit var tvHint: TextView
 
@@ -135,6 +137,8 @@ class TimeMarkCaptureActivity : AppCompatActivity() {
     private var flashMode = ImageCapture.FLASH_MODE_OFF
     private val cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private var isCapturing = false
+    private var isMultiShotMode = false
+    private var capturedCount = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -150,10 +154,35 @@ class TimeMarkCaptureActivity : AppCompatActivity() {
         btnFlash = findViewById(R.id.btn_flash)
         btnSwitchCamera = findViewById(R.id.btn_switch_camera)
         btnClose = findViewById(R.id.btn_close)
+        btnModeToggle = findViewById(R.id.btn_mode_toggle)
+        btnDone = findViewById(R.id.btn_done)
         flashOverlay = findViewById(R.id.view_flash_overlay)
         tvHint = findViewById(R.id.tv_hint)
 
+        // Load saved multi-shot mode preference
+        val prefs = getSharedPreferences("timemark_settings", Context.MODE_PRIVATE)
+        isMultiShotMode = prefs.getBoolean("multi_shot_enabled", false)
+        updateModeUI()
+
+        btnModeToggle.setOnClickListener {
+            isMultiShotMode = !isMultiShotMode
+            prefs.edit().putBoolean("multi_shot_enabled", isMultiShotMode).apply()
+            updateModeUI()
+            val modeName = if (isMultiShotMode) "Chụp nhiều ảnh" else "Chụp 1 chạm"
+            Toast.makeText(this, "Chế độ: $modeName", Toast.LENGTH_SHORT).show()
+        }
+
+        btnDone.setOnClickListener {
+            if (capturedCount > 0) {
+                Toast.makeText(this, "📸 Đã lưu $capturedCount ảnh TimeMark thành công!", Toast.LENGTH_SHORT).show()
+            }
+            finishWithoutAnimation()
+        }
+
         btnClose.setOnClickListener {
+            if (capturedCount > 0) {
+                Toast.makeText(this, "📸 Đã lưu $capturedCount ảnh TimeMark thành công!", Toast.LENGTH_SHORT).show()
+            }
             finishWithoutAnimation()
         }
 
@@ -167,6 +196,30 @@ class TimeMarkCaptureActivity : AppCompatActivity() {
 
         btnShutter.setOnClickListener {
             takeQuickPhoto()
+        }
+    }
+
+    private fun updateModeUI() {
+        if (isMultiShotMode) {
+            btnModeToggle.text = "📸 Nhiều"
+            btnModeToggle.setTextColor(Color.parseColor("#FFD54F"))
+            btnDone.visibility = View.VISIBLE
+            btnDone.text = if (capturedCount > 0) "✓ Xong ($capturedCount)" else "✓ Xong"
+            tvHint.text = if (capturedCount > 0) {
+                "Đã chụp $capturedCount ảnh · Bấm tiếp để chụp thêm, bấm Xong để hoàn tất"
+            } else {
+                "Chế độ nhiều ảnh · Bấm chụp liên tiếp, bấm Xong để hoàn tất"
+            }
+        } else {
+            btnModeToggle.text = "📸 1 ảnh"
+            btnModeToggle.setTextColor(Color.WHITE)
+            btnDone.visibility = if (capturedCount > 0) View.VISIBLE else View.GONE
+            btnDone.text = if (capturedCount > 0) "✓ Xong ($capturedCount)" else "✓ Xong"
+            tvHint.text = if (capturedCount > 0) {
+                "Đã chụp $capturedCount ảnh"
+            } else {
+                "Chụp 1 chạm · Tự động lưu & đóng ngay"
+            }
         }
     }
 
@@ -277,7 +330,7 @@ class TimeMarkCaptureActivity : AppCompatActivity() {
         }
 
         val cacheDir = File(cacheDir, "timemark").apply { mkdirs() }
-        val rawFile = File(cacheDir, "raw_${System.currentTimeMillis()}.jpg")
+        val rawFile = File(cacheDir, "raw_${System.currentTimeMillis()}_${capturedCount + 1}.jpg")
         val outputOptions = ImageCapture.OutputFileOptions.Builder(rawFile).build()
 
         capture.takePicture(
@@ -288,15 +341,34 @@ class TimeMarkCaptureActivity : AppCompatActivity() {
                     Log.e(TAG, "Lỗi chụp ảnh: ${exc.message}", exc)
                     mainHandler.post {
                         Toast.makeText(applicationContext, "Lỗi chụp: ${exc.message}", Toast.LENGTH_SHORT).show()
-                        finishWithoutAnimation()
+                        if (!isMultiShotMode) {
+                            finishWithoutAnimation()
+                        } else {
+                            isCapturing = false
+                            btnShutter.isEnabled = true
+                        }
                     }
                 }
 
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    // Đóng activity NGAY LẬP TỨC để shipper trở về app giao hàng (Shopee, Grab,...) không cần chờ đợi!
                     val appContext = applicationContext
-                    mainHandler.post {
-                        finishWithoutAnimation()
+
+                    if (!isMultiShotMode) {
+                        // Chế độ 1 ảnh: Đóng activity NGAY LẬP TỨC để shipper trở về app giao hàng!
+                        mainHandler.post {
+                            finishWithoutAnimation()
+                        }
+                    } else {
+                        // Chế độ nhiều ảnh: Cập nhật đếm và mở lại nút chụp sau 200ms
+                        capturedCount++
+                        mainHandler.post {
+                            updateModeUI()
+                            Toast.makeText(appContext, "📸 Đã chụp ảnh $capturedCount", Toast.LENGTH_SHORT).show()
+                            mainHandler.postDelayed({
+                                isCapturing = false
+                                btnShutter.isEnabled = true
+                            }, 200)
+                        }
                     }
 
                     // Toàn bộ tác vụ quét mã, lấy địa chỉ GPS, đóng dấu watermark và lưu thư viện chạy ngầm:
@@ -339,6 +411,15 @@ class TimeMarkCaptureActivity : AppCompatActivity() {
             @Suppress("DEPRECATION")
             overridePendingTransition(0, 0)
         }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (capturedCount > 0) {
+            Toast.makeText(this, "📸 Đã lưu $capturedCount ảnh TimeMark thành công!", Toast.LENGTH_SHORT).show()
+        }
+        @Suppress("DEPRECATION")
+        super.onBackPressed()
     }
 
     override fun onDestroy() {
