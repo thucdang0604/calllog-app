@@ -1,0 +1,3 @@
+- **Tự động bám mép khi thu nhỏ**: Khắc phục hiện tượng bong bóng đứng yên sau khi thu nhỏ từ bảng nổi. Giờ đây bong bóng sẽ tự động lướt êm ái bám sát mép màn hình ngay lập tức.
+- **Xử lý đơn không có POD**: Các đơn hàng không có ảnh POD trong danh sách "Đã nhận" hiển thị nút "✓ Xong" (thay vì "POD"), bấm là hoàn tất và chuyển sang danh sách "Done" ngay. Trong màn hình app chính cũng bổ sung nút hoàn tất trực tiếp cho đơn không có POD.
+- **Sửa nút xóa nhanh**: Nút xóa nhanh (biểu tượng chổi quét trên thanh tiêu đề và nút Xóa sạch trong tab Đã xong) đã được điều chỉnh để xóa danh sách "Done" (Đã xong) thay vì xóa nhầm danh sách "Đã nhận".

@@ -95,7 +95,7 @@ public class FloatingTouchListener implements View.OnTouchListener {
         return true;
     }
 
-    private void snapToEdges() {
+    public void snapToEdges() {
         try {
             if (snapRunnable != null) {
                 handler.removeCallbacks(snapRunnable);

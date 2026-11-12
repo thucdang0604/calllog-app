@@ -96,6 +96,9 @@ class _PaymentReconciliationScreenState
   List<_PaymentRecord> get _allReceived =>
       _records.where((record) => record.isReceived).toList();
 
+  List<_PaymentRecord> get _allDone =>
+      _records.where((record) => record.isDone).toList();
+
   @override
   void initState() {
     super.initState();
@@ -289,6 +292,48 @@ class _PaymentReconciliationScreenState
     }
   }
 
+  Future<void> _clearDoneRecords() async {
+    if (_allDone.isEmpty) return;
+    final shouldClear = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Xóa các khoản Đã xong (Done)?'),
+        content: Text(
+          'Sẽ xóa toàn bộ ${_allDone.length} khoản đã hoàn tất (Done) và ảnh lưu kèm. '
+          'Các khoản đang chờ và đã nhận sẽ được giữ lại.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Hủy'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Xóa tất cả'),
+          ),
+        ],
+      ),
+    );
+    if (shouldClear != true) return;
+
+    try {
+      final removed = await _channel.invokeMethod<int>(
+        'clearDonePaymentRecords',
+      );
+      await _loadRecords();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Đã xóa ${removed ?? 0} khoản đã xong (Done).')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Không xóa được danh sách: $error')),
+      );
+    }
+  }
+
   Future<void> _clearReceivedRecords() async {
     if (_allReceived.isEmpty) return;
     final shouldClear = await showDialog<bool>(
@@ -402,12 +447,25 @@ class _PaymentReconciliationScreenState
         actions: [
           PopupMenuButton<String>(
             enabled: !_backupBusy,
-            tooltip: 'Sao lưu và khôi phục',
-            icon: const Icon(Icons.backup_outlined),
-            onSelected: (action) => _handleBackup(action == 'import'),
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'export', child: Text('Xuất bản sao đối soát')),
-              PopupMenuItem(value: 'import', child: Text('Khôi phục từ bản sao')),
+            tooltip: 'Tùy chọn mở rộng',
+            icon: const Icon(Icons.more_vert),
+            onSelected: (action) {
+              if (action == 'export') {
+                _handleBackup(false);
+              } else if (action == 'import') {
+                _handleBackup(true);
+              } else if (action == 'clear_received') {
+                _clearReceivedRecords();
+              }
+            },
+            itemBuilder: (_) => [
+              const PopupMenuItem(value: 'export', child: Text('Xuất bản sao đối soát')),
+              const PopupMenuItem(value: 'import', child: Text('Khôi phục từ bản sao')),
+              if (_allReceived.isNotEmpty)
+                const PopupMenuItem(
+                  value: 'clear_received',
+                  child: Text('Xóa danh sách Đã nhận (Chưa POD)', style: TextStyle(color: Colors.red)),
+                ),
             ],
           ),
           IconButton(
@@ -420,8 +478,8 @@ class _PaymentReconciliationScreenState
             icon: const Icon(Icons.account_balance_outlined),
           ),
           IconButton(
-            onPressed: _allReceived.isEmpty ? null : _clearReceivedRecords,
-            tooltip: 'Xóa tất cả khoản đã nhận',
+            onPressed: _allDone.isEmpty ? null : _clearDoneRecords,
+            tooltip: 'Xóa tất cả khoản Đã xong (Done)',
             icon: const Icon(Icons.delete_sweep_outlined),
           ),
           IconButton(
@@ -891,6 +949,19 @@ class _PaymentReconciliationScreenState
                       ),
                     ),
                   ),
+                  if (records.isNotEmpty) ...[
+                    const SizedBox(width: 6),
+                    TextButton.icon(
+                      style: TextButton.styleFrom(
+                        foregroundColor: Colors.red.shade700,
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      onPressed: _clearDoneRecords,
+                      icon: const Icon(Icons.delete_sweep, size: 16),
+                      label: const Text('Xóa sạch', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                    ),
+                  ],
                 ],
               ),
             );
@@ -1059,12 +1130,19 @@ class _PaymentReconciliationScreenState
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (status == 'received' && record.imagePath.isNotEmpty)
+            if (status == 'received') ...[
+              if (record.imagePath.isNotEmpty)
+                IconButton(
+                  tooltip: 'Tải ảnh POD & Chuyển sang Đã xong',
+                  icon: const Icon(Icons.download_for_offline, color: Colors.blue),
+                  onPressed: () => _saveImageAndMarkDone(record),
+                ),
               IconButton(
-                tooltip: 'Tải ảnh POD & Chuyển sang Đã xong',
-                icon: const Icon(Icons.download_for_offline, color: Colors.blue),
-                onPressed: () => _saveImageAndMarkDone(record),
+                tooltip: 'Chuyển sang Đã xong',
+                icon: const Icon(Icons.task_alt, color: Colors.green),
+                onPressed: () => _setStatus(record, 'done'),
               ),
+            ],
             if (status == 'done')
               IconButton(
                 tooltip: 'Chuyển lại về Đã nhận',

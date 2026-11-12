@@ -844,7 +844,9 @@ public class FloatingWindowService extends Service {
         try {
             replaceFloatingView(R.layout.floating_bubble, dp(56), dp(56));
             floatingView.setOnClickListener(v -> showFloatingPanel(false));
-            floatingView.setOnTouchListener(new FloatingTouchListener(windowManager, floatingView, this, true));
+            FloatingTouchListener touchListener = new FloatingTouchListener(windowManager, floatingView, this, true);
+            floatingView.setOnTouchListener(touchListener);
+            floatingView.post(touchListener::snapToEdges);
             updateBubbleBadge();
         } catch (Exception e) {
             Log.e(TAG, "Error showing floating bubble", e);
@@ -1276,14 +1278,19 @@ public class FloatingWindowService extends Service {
         amountView.setEllipsize(android.text.TextUtils.TruncateAt.END);
 
         // Modern Pill Button
+        boolean hasPod = imagePath != null && !imagePath.trim().isEmpty() && new java.io.File(imagePath).isFile();
         Button receivedButton = new Button(this);
-        receivedButton.setText(received ? "POD" : "✓ Nhận");
+        if (received) {
+            receivedButton.setText(hasPod ? "POD" : "✓ Xong");
+        } else {
+            receivedButton.setText("✓ Nhận");
+        }
         receivedButton.setTextSize(11);
         receivedButton.setTextColor(0xFFFFFFFF);
         receivedButton.setTypeface(null, Typeface.BOLD);
         GradientDrawable pillGd = new GradientDrawable();
         pillGd.setCornerRadius(dp(12));
-        pillGd.setColor(received ? 0xFF1565C0 : 0xFF2E7D32);
+        pillGd.setColor(received ? (hasPod ? 0xFF1565C0 : 0xFF2E7D32) : 0xFF2E7D32);
         receivedButton.setBackground(pillGd);
         receivedButton.setMinWidth(0);
         receivedButton.setMinimumWidth(0);
@@ -1291,16 +1298,32 @@ public class FloatingWindowService extends Service {
         receivedButton.setMinimumHeight(0);
         receivedButton.setPadding(dp(10), dp(4), dp(10), dp(4));
         receivedButton.setContentDescription(received
-            ? "Xem ảnh POD của đơn hàng"
+            ? (hasPod ? "Xem ảnh POD của đơn hàng" : "Đánh dấu đơn hàng đã xong (Done)")
             : "Đánh dấu khoản chuyển khoản đã nhận");
         receivedButton.setOnClickListener(v -> {
             if (received) {
-                openPaymentPod(id, imagePath);
+                if (hasPod) {
+                    openPaymentPod(id, imagePath);
+                } else if (PaymentTrackingStore.setStatus(FloatingWindowService.this, id, "done")) {
+                    PaymentTrackingEventBus.notifyRecordsChanged();
+                    renderPaymentQueue();
+                    Toast.makeText(FloatingWindowService.this, "Đã chuyển đơn sang Đã xong", Toast.LENGTH_SHORT).show();
+                }
             } else if (PaymentTrackingStore.setReceived(FloatingWindowService.this, id, true)) {
                 PaymentTrackingEventBus.notifyRecordsChanged();
                 renderPaymentQueue();
             }
         });
+        if (received && hasPod) {
+            receivedButton.setOnLongClickListener(v -> {
+                if (PaymentTrackingStore.setStatus(FloatingWindowService.this, id, "done")) {
+                    PaymentTrackingEventBus.notifyRecordsChanged();
+                    renderPaymentQueue();
+                    Toast.makeText(FloatingWindowService.this, "Đã chuyển đơn sang Đã xong", Toast.LENGTH_SHORT).show();
+                }
+                return true;
+            });
+        }
 
         actionRow.addView(detailsView, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         if (!amount.isEmpty()) {
@@ -1419,7 +1442,14 @@ public class FloatingWindowService extends Service {
 
     private void openPaymentPod(String recordId, String imagePath) {
         if (imagePath == null || imagePath.isEmpty() || !new java.io.File(imagePath).isFile()) {
-            Toast.makeText(this, "Đơn này chưa có ảnh POD", Toast.LENGTH_SHORT).show();
+            if (recordId != null && !recordId.isEmpty()) {
+                PaymentTrackingStore.setStatus(this, recordId, "done");
+                PaymentTrackingEventBus.notifyRecordsChanged();
+                renderPaymentQueue();
+                Toast.makeText(this, "Đơn không có ảnh POD -> Đã chuyển sang Đã xong", Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(this, "Đơn này chưa có ảnh POD", Toast.LENGTH_SHORT).show();
+            }
             return;
         }
         try {

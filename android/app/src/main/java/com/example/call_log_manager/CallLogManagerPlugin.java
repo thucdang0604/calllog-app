@@ -190,6 +190,9 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
             case "clearReceivedPaymentRecords":
                 result.success(PaymentTrackingStore.clearReceived(context));
                 break;
+            case "clearDonePaymentRecords":
+                result.success(PaymentTrackingStore.clearDone(context));
+                break;
             case "savePaymentTrackingImage":
                 savePaymentTrackingImage(call, result);
                 break;

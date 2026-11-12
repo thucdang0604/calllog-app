@@ -321,6 +321,25 @@ final class PaymentTrackingStore {
         return removed;
     }
 
+    static synchronized int clearDone(Context context) {
+        SQLiteDatabase db = database(context);
+        java.util.ArrayList<String> paths = new java.util.ArrayList<>();
+        int removed = 0;
+        try (Cursor cursor = db.query(TABLE, new String[] {"record_json"}, "status=?",
+            new String[] {"done"}, null, null, null)) {
+            while (cursor.moveToNext()) {
+                JSONObject record = new JSONObject(cursor.getString(0));
+                addPath(paths, record.optString("imagePath", ""));
+                addPath(paths, record.optString("qrImagePath", ""));
+                removed++;
+            }
+        } catch (JSONException ignored) {}
+        if (removed == 0) return 0;
+        db.delete(TABLE, "status=?", new String[] {"done"});
+        deleteFiles(paths);
+        return removed;
+    }
+
     static synchronized boolean deleteRecord(Context context, String id) {
         if (id == null || id.isEmpty()) return false;
         JSONObject record = findRecord(context, id);
