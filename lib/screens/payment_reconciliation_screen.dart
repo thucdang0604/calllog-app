@@ -454,18 +454,11 @@ class _PaymentReconciliationScreenState
                 _handleBackup(false);
               } else if (action == 'import') {
                 _handleBackup(true);
-              } else if (action == 'clear_received') {
-                _clearReceivedRecords();
               }
             },
-            itemBuilder: (_) => [
-              const PopupMenuItem(value: 'export', child: Text('Xuất bản sao đối soát')),
-              const PopupMenuItem(value: 'import', child: Text('Khôi phục từ bản sao')),
-              if (_allReceived.isNotEmpty)
-                const PopupMenuItem(
-                  value: 'clear_received',
-                  child: Text('Xóa danh sách Đã nhận (Chưa POD)', style: TextStyle(color: Colors.red)),
-                ),
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'export', child: Text('Xuất bản sao đối soát')),
+              PopupMenuItem(value: 'import', child: Text('Khôi phục từ bản sao')),
             ],
           ),
           IconButton(
@@ -476,11 +469,6 @@ class _PaymentReconciliationScreenState
             ),
             tooltip: 'Cấu hình tài khoản QR Zalo',
             icon: const Icon(Icons.account_balance_outlined),
-          ),
-          IconButton(
-            onPressed: _allDone.isEmpty ? null : _clearDoneRecords,
-            tooltip: 'Xóa tất cả khoản Đã xong (Done)',
-            icon: const Icon(Icons.delete_sweep_outlined),
           ),
           IconButton(
             onPressed: _loadRecords,
@@ -897,6 +885,19 @@ class _PaymentReconciliationScreenState
                       ),
                     ),
                   ),
+                  if (records.isNotEmpty) ...[
+                    const SizedBox(width: 6),
+                    TextButton.icon(
+                      style: TextButton.styleFrom(
+                        foregroundColor: Colors.red.shade700,
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      onPressed: _clearReceivedRecords,
+                      icon: const Icon(Icons.delete_sweep, size: 16),
+                      label: const Text('Xóa sạch', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                    ),
+                  ],
                 ],
               ),
             );

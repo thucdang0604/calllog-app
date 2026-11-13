@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/scanned_barcode_item.dart';
@@ -81,6 +82,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
     setState(() {
       _items.removeWhere((e) => e.id == item.id);
     });
+    await BarcodeScannerService.deleteImageFile(item.imagePath);
     await BarcodeScannerService.saveHistory(_items);
   }
 
@@ -107,9 +109,11 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
     );
 
     if (confirm == true) {
+      final itemsToDelete = List<ScannedBarcodeItem>.from(_items);
       setState(() {
         _items.clear();
       });
+      await BarcodeScannerService.deleteAllImages(itemsToDelete);
       await BarcodeScannerService.saveHistory(_items);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -120,6 +124,174 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
         );
       }
     }
+  }
+
+  Widget _buildFormatIcon(bool isQr) {
+    return Container(
+      width: 48,
+      height: 48,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: isQr ? Colors.purple.shade50 : Colors.blue.shade50,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Icon(
+        isQr ? Icons.qr_code_2 : Icons.line_weight,
+        color: isQr ? Colors.purple.shade700 : Colors.blue.shade700,
+        size: 24,
+      ),
+    );
+  }
+
+  Widget _buildLeadingThumbnail(ScannedBarcodeItem item, bool isQr) {
+    if (!item.hasImage) {
+      return _buildFormatIcon(isQr);
+    }
+
+    return InkWell(
+      onTap: () => _showPhotoPreviewDialog(item),
+      borderRadius: BorderRadius.circular(8),
+      child: Tooltip(
+        message: 'Xem ảnh ngoại quan',
+        child: Stack(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.file(
+                File(item.imagePath!),
+                width: 48,
+                height: 48,
+                cacheWidth: 160,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => _buildFormatIcon(isQr),
+              ),
+            ),
+            Positioned(
+              right: 2,
+              bottom: 2,
+              child: Container(
+                padding: const EdgeInsets.all(2),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.6),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: const Icon(
+                  Icons.zoom_in,
+                  size: 11,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showPhotoPreviewDialog(ScannedBarcodeItem item) {
+    if (!item.hasImage) return;
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => Dialog(
+        insetPadding: const EdgeInsets.all(16),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+              color: Colors.grey.shade900,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          item.code,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontFamily: 'monospace',
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '${item.format} · ${item.formattedDateTime}',
+                          style: TextStyle(
+                            color: Colors.grey.shade300,
+                            fontSize: 11.5,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.copy_rounded, color: Colors.white, size: 20),
+                    tooltip: 'Copy mã',
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: item.code));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Đã copy: ${item.code}'),
+                          duration: const Duration(seconds: 1),
+                        ),
+                      );
+                    },
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white),
+                    tooltip: 'Đóng',
+                    onPressed: () => Navigator.of(ctx).pop(),
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(context).size.height * 0.62,
+              ),
+              color: Colors.black,
+              child: InteractiveViewer(
+                minScale: 1.0,
+                maxScale: 4.5,
+                child: Image.file(
+                  File(item.imagePath!),
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, __, ___) => const Padding(
+                    padding: EdgeInsets.all(32),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.broken_image_outlined, color: Colors.white54, size: 48),
+                        SizedBox(height: 8),
+                        Text(
+                          'Ảnh ngoại quan không còn tồn tại.',
+                          style: TextStyle(color: Colors.white70),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              color: Colors.grey.shade100,
+              child: Text(
+                'Chạm 2 ngón tay để phóng to/thu nhỏ xem chi tiết kiện hàng',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 11.5, color: Colors.grey.shade700),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _showAddManualCodeDialog() async {
@@ -429,18 +601,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
                               ),
                               child: ListTile(
                                 contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                                leading: Container(
-                                  padding: const EdgeInsets.all(8),
-                                  decoration: BoxDecoration(
-                                    color: isQr ? Colors.purple.shade50 : Colors.blue.shade50,
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Icon(
-                                    isQr ? Icons.qr_code_2 : Icons.line_weight,
-                                    color: isQr ? Colors.purple.shade700 : Colors.blue.shade700,
-                                    size: 24,
-                                  ),
-                                ),
+                                leading: _buildLeadingThumbnail(item, isQr),
                                 title: SelectableText(
                                   item.code,
                                   style: const TextStyle(

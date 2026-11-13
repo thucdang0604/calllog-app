@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/scanned_barcode_item.dart';
@@ -6,6 +7,8 @@ import '../models/scanned_barcode_item.dart';
 class BarcodeScannerService {
   static const _channel = MethodChannel('call_log_manager');
   static const _prefKey = 'scanned_barcodes_history';
+  static const int _maxStoredPhotos = 300;
+  static const int _photoMaxAgeMs = 30 * 24 * 60 * 60 * 1000;
 
   static Future<List<ScannedBarcodeItem>> loadHistory() async {
     try {
@@ -15,7 +18,7 @@ class BarcodeScannerService {
 
       final decoded = jsonDecode(jsonStr);
       if (decoded is List) {
-        return decoded
+        final loaded = decoded
             .map((item) {
               if (item is Map<String, dynamic>) {
                 return ScannedBarcodeItem.fromJson(item);
@@ -26,6 +29,12 @@ class BarcodeScannerService {
             })
             .whereType<ScannedBarcodeItem>()
             .toList();
+
+        final pruned = await _pruneExpiredPhotos(loaded);
+        if (pruned.changed) {
+          await saveHistory(pruned.items);
+        }
+        return pruned.items;
       }
     } catch (_) {}
     return [];
@@ -37,6 +46,52 @@ class BarcodeScannerService {
       final list = items.map((e) => e.toJson()).toList();
       await prefs.setString(_prefKey, jsonEncode(list));
     } catch (_) {}
+  }
+
+  static Future<void> deleteImageFile(String? path) async {
+    if (path == null || path.isEmpty) return;
+    try {
+      final file = File(path);
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (_) {}
+  }
+
+  static Future<void> deleteAllImages(List<ScannedBarcodeItem> items) async {
+    for (final item in items) {
+      if (item.hasImage) {
+        await deleteImageFile(item.imagePath);
+      }
+    }
+  }
+
+  static Future<({List<ScannedBarcodeItem> items, bool changed})> _pruneExpiredPhotos(
+    List<ScannedBarcodeItem> items,
+  ) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    var photoCount = 0;
+    var changed = false;
+    final result = <ScannedBarcodeItem>[];
+
+    for (final item in items) {
+      if (!item.hasImage) {
+        result.add(item);
+        continue;
+      }
+
+      final isExpired = (now - item.timestamp) > _photoMaxAgeMs;
+      final isOverLimit = photoCount >= _maxStoredPhotos;
+      if (isExpired || isOverLimit) {
+        await deleteImageFile(item.imagePath);
+        result.add(item.copyWith(clearImagePath: true));
+        changed = true;
+      } else {
+        photoCount++;
+        result.add(item);
+      }
+    }
+    return (items: result, changed: changed);
   }
 
   static Future<List<ScannedBarcodeItem>> openScanner() async {
@@ -59,11 +114,20 @@ class BarcodeScannerService {
 
         if (newItems.isNotEmpty) {
           final current = await loadHistory();
-          // Merge avoiding immediate duplicates while putting newest on top
+          // Merge avoiding duplicates while putting newest on top
           final existingCodes = current.map((e) => e.code).toSet();
-          final uniqueNew = newItems.where((e) => !existingCodes.contains(e.code)).toList();
-          final updated = [...uniqueNew, ...current];
-          await saveHistory(updated);
+          final uniqueNew = <ScannedBarcodeItem>[];
+          for (final item in newItems) {
+            if (existingCodes.add(item.code)) {
+              uniqueNew.add(item);
+            } else if (item.hasImage) {
+              // Discard orphaned photo file when code already exists in history
+              await deleteImageFile(item.imagePath);
+            }
+          }
+          final merged = [...uniqueNew, ...current];
+          final pruned = await _pruneExpiredPhotos(merged);
+          await saveHistory(pruned.items);
           return uniqueNew.isNotEmpty ? uniqueNew : newItems;
         }
       }

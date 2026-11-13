@@ -17,21 +17,12 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent">
 
-        <!-- Top translucent mask -->
-        <View
-            android:id="@+id/mask_top"
-            android:layout_width="match_parent"
-            android:layout_height="140dp"
-            android:layout_alignParentTop="true"
-            android:background="#88000000" />
-
         <!-- Viewfinder Center Window -->
         <FrameLayout
             android:id="@+id/viewfinder_box"
             android:layout_width="290dp"
             android:layout_height="220dp"
-            android:layout_below="@id/mask_top"
-            android:layout_centerHorizontal="true"
+            android:layout_centerInParent="true"
             android:background="@drawable/viewfinder_border">
 
             <!-- Laser Scan Line -->
@@ -43,11 +34,20 @@
                 android:background="#00E676" />
         </FrameLayout>
 
+        <!-- Top translucent mask -->
+        <View
+            android:id="@+id/mask_top"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_alignParentTop="true"
+            android:layout_above="@id/viewfinder_box"
+            android:background="#88000000" />
+
         <!-- Left mask -->
         <View
             android:layout_width="match_parent"
             android:layout_height="220dp"
-            android:layout_below="@id/mask_top"
+            android:layout_alignTop="@id/viewfinder_box"
             android:layout_alignParentStart="true"
             android:layout_toStartOf="@id/viewfinder_box"
             android:background="#88000000" />
@@ -56,7 +56,7 @@
         <View
             android:layout_width="match_parent"
             android:layout_height="220dp"
-            android:layout_below="@id/mask_top"
+            android:layout_alignTop="@id/viewfinder_box"
             android:layout_alignParentEnd="true"
             android:layout_toEndOf="@id/viewfinder_box"
             android:background="#88000000" />
@@ -64,8 +64,9 @@
         <!-- Bottom mask -->
         <View
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
+            android:layout_height="0dp"
             android:layout_below="@id/viewfinder_box"
+            android:layout_alignParentBottom="true"
             android:background="#88000000" />
     </RelativeLayout>
 
@@ -125,6 +126,25 @@
         android:paddingBottom="32dp"
         android:paddingStart="20dp"
         android:paddingEnd="20dp">
+
+        <!-- Toggle Save Parcel Overview Photo -->
+        <TextView
+            android:id="@+id/btn_barcode_toggle_photo"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginBottom="10dp"
+            android:background="@drawable/camera_control_btn_bg"
+            android:clickable="true"
+            android:focusable="true"
+            android:paddingStart="14dp"
+            android:paddingEnd="14dp"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"
+            android:text="📷 Lưu ảnh ngoại quan: BẬT"
+            android:textColor="#81C784"
+            android:textSize="12sp"
+            android:textStyle="bold" />
 
         <!-- Last Scanned Code Banner -->
         <TextView
