@@ -33,7 +33,9 @@ import androidx.core.content.ContextCompat;
 import java.util.ArrayList;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -58,9 +60,13 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
     private static final int RECEIVE_SMS_PERMISSION_REQUEST_CODE = 1003;
     private static final int EXPORT_PAYMENT_BACKUP_REQUEST_CODE = 1004;
     private static final int IMPORT_PAYMENT_BACKUP_REQUEST_CODE = 1005;
+    private static final int CALL_REC_PERMISSION_REQUEST_CODE = 1006;
 
     private MethodChannel channel;
     private EventChannel paymentTrackingEvents;
+    private EventChannel callRecordingEvents;
+    private final android.os.Handler callRecMainHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private Result pendingCallRecPermissionResult;
     private Context context;
     private Activity activity;
     private ActivityPluginBinding activityBinding;
@@ -69,8 +75,9 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
     private Result pendingIncomingSmsPermissionResult;
     private Result pendingPaymentImagePermissionResult;
     private String pendingPaymentImageRecordId;
-    private final ExecutorService backgroundExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService backgroundExecutor = Executors.newFixedThreadPool(3);
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final Object barcodeFileLock = new Object();
 
     @Override
     public void onAttachedToEngine(FlutterPluginBinding flutterPluginBinding) {
@@ -91,6 +98,21 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
                 PaymentTrackingEventBus.setEventSink(null);
             }
         });
+        callRecordingEvents = new EventChannel(
+            flutterPluginBinding.getBinaryMessenger(),
+            "call_log_manager/call_recording_events"
+        );
+        callRecordingEvents.setStreamHandler(new EventChannel.StreamHandler() {
+            @Override
+            public void onListen(Object arguments, EventChannel.EventSink events) {
+                CallRecordingEventBus.INSTANCE.setEventSink(events);
+            }
+
+            @Override
+            public void onCancel(Object arguments) {
+                CallRecordingEventBus.INSTANCE.setEventSink(null);
+            }
+        });
         context = flutterPluginBinding.getApplicationContext();
     }
 
@@ -104,7 +126,10 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
 
     @Override
     public void onDetachedFromActivityForConfigChanges() {
-        if (activityBinding != null) activityBinding.removeActivityResultListener(this);
+        if (activityBinding != null) {
+            activityBinding.removeRequestPermissionsResultListener(this);
+            activityBinding.removeActivityResultListener(this);
+        }
         this.activityBinding = null;
         this.activity = null;
     }
@@ -119,9 +144,37 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
 
     @Override
     public void onDetachedFromActivity() {
-        if (activityBinding != null) activityBinding.removeActivityResultListener(this);
+        if (activityBinding != null) {
+            activityBinding.removeRequestPermissionsResultListener(this);
+            activityBinding.removeActivityResultListener(this);
+        }
+        clearDanglingActivityResults();
         this.activityBinding = null;
         this.activity = null;
+    }
+
+    private void clearDanglingActivityResults() {
+        if (pendingPermissionResult != null) {
+            pendingPermissionResult.success(false);
+            pendingPermissionResult = null;
+        }
+        if (pendingCallRecPermissionResult != null) {
+            pendingCallRecPermissionResult.success(false);
+            pendingCallRecPermissionResult = null;
+        }
+        if (pendingIncomingSmsPermissionResult != null) {
+            pendingIncomingSmsPermissionResult.success(false);
+            pendingIncomingSmsPermissionResult = null;
+        }
+        if (pendingPaymentImagePermissionResult != null) {
+            pendingPaymentImagePermissionResult.error("DETACHED", "Activity đã đóng khi chờ quyền lưu ảnh", null);
+            pendingPaymentImagePermissionResult = null;
+            pendingPaymentImageRecordId = null;
+        }
+        if (pendingPaymentBackupResult != null) {
+            pendingPaymentBackupResult.success(null);
+            pendingPaymentBackupResult = null;
+        }
     }
 
     @Override
@@ -277,7 +330,7 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
                 openQuickCamera(result);
                 break;
             case "openBarcodeScanner":
-                openBarcodeScanner(result);
+                openBarcodeScanner(call, result);
                 break;
 
             case "getAutoFakeSmsIntent":
@@ -298,6 +351,60 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
                 break;
             case "shareText":
                 shareText(call, result);
+                break;
+            case "hasCallRecordingPermissions":
+                hasCallRecordingPermissions(result);
+                break;
+            case "requestCallRecordingPermissions":
+                requestCallRecordingPermissions(result);
+                break;
+            case "hasOverlayPermission":
+                result.success(Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(context));
+                break;
+            case "loadBarcodeHistoryJson":
+                loadBarcodeHistoryJson(result);
+                break;
+            case "saveBarcodeHistoryJson":
+                saveBarcodeHistoryJson(call, result);
+                break;
+            case "openAppDetailsSettings":
+                openAppDetailsSettings(result);
+                break;
+            case "getCallRecordings":
+                getCallRecordings(result);
+                break;
+            case "deleteCallRecordings":
+                deleteCallRecordings(call, result);
+                break;
+            case "deleteCallRecordingsByDate":
+                deleteCallRecordingsByDate(call, result);
+                break;
+            case "shareCallRecording":
+                shareCallRecording(call, result);
+                break;
+            case "getCallRecordingAudioSource":
+                result.success(CallRecordingStore.INSTANCE.getAudioSourcePref(context));
+                break;
+            case "setCallRecordingAudioSource":
+                setCallRecordingAudioSource(call, result);
+                break;
+            case "playCallRecording":
+                playCallRecording(call, result);
+                break;
+            case "pauseCallRecording":
+                pauseCallRecording(result);
+                break;
+            case "resumeCallRecording":
+                resumeCallRecording(result);
+                break;
+            case "seekCallRecording":
+                seekCallRecording(call, result);
+                break;
+            case "stopCallRecording":
+                stopCallRecording(result);
+                break;
+            case "getCallRecordingPlaybackState":
+                getCallRecordingPlaybackState(result);
                 break;
 
             default:
@@ -517,7 +624,7 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
     private static final int BARCODE_SCAN_REQUEST_CODE = 4501;
     private Result pendingBarcodeScanResult = null;
 
-    private void openBarcodeScanner(Result result) {
+    private void openBarcodeScanner(MethodCall call, Result result) {
         if (activity == null) {
             result.error("NO_ACTIVITY", "Cannot open scanner without foreground activity", null);
             return;
@@ -525,6 +632,20 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
         try {
             pendingBarcodeScanResult = result;
             Intent intent = new Intent(activity, BarcodeScanActivity.class);
+            List<String> pendingCodes = call.argument("existingPendingCodes");
+            if (pendingCodes != null && !pendingCodes.isEmpty()) {
+                intent.putStringArrayListExtra(
+                        BarcodeScanActivity.EXTRA_EXISTING_PENDING_CODES,
+                        new java.util.ArrayList<>(pendingCodes)
+                );
+            }
+            List<String> sharedCodes = call.argument("existingSharedCodes");
+            if (sharedCodes != null && !sharedCodes.isEmpty()) {
+                intent.putStringArrayListExtra(
+                        BarcodeScanActivity.EXTRA_EXISTING_SHARED_CODES,
+                        new java.util.ArrayList<>(sharedCodes)
+                );
+            }
             activity.startActivityForResult(intent, BARCODE_SCAN_REQUEST_CODE);
         } catch (Exception e) {
             pendingBarcodeScanResult = null;
@@ -638,34 +759,37 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
     }
 
     private void getPaymentTrackingRecords(Result result) {
-        JSONArray records = PaymentTrackingStore.getRecords(context);
-        List<Map<String, Object>> output = new ArrayList<>();
-        for (int index = 0; index < records.length(); index++) {
-            JSONObject record = records.optJSONObject(index);
-            if (record == null) continue;
+        final Context appContext = context;
+        backgroundExecutor.execute(() -> {
+            JSONArray records = PaymentTrackingStore.getRecords(appContext);
+            List<Map<String, Object>> output = new ArrayList<>(records.length());
+            for (int index = 0; index < records.length(); index++) {
+                JSONObject record = records.optJSONObject(index);
+                if (record == null) continue;
 
-            Map<String, Object> item = new HashMap<>();
-            item.put("id", record.optString("id", ""));
-            item.put("phone", record.optString("phone", ""));
-            item.put("channel", record.optString("channel", "sms"));
-            item.put("amount", record.optString("amount", ""));
-            item.put("message", record.optString("message", ""));
-            item.put("createdAt", record.optLong("createdAt", 0L));
-            item.put("sentAt", record.optLong("sentAt", 0L));
-            item.put("status", record.optString("status", "pending"));
-            item.put("receivedAt", record.isNull("receivedAt") ? null : record.optLong("receivedAt", 0L));
-            item.put("smsStatus", record.optString("smsStatus", ""));
-            item.put("deliveryStatus", record.optString("deliveryStatus", ""));
-            item.put("orderCode", record.optString("orderCode", ""));
-            item.put("imagePath", record.optString("imagePath", ""));
-            item.put("capturedAt", record.optLong("capturedAt", 0L));
-            item.put("customerReplied", record.optBoolean("customerReplied", false));
-            item.put("replyPhone", record.optString("replyPhone", ""));
-            item.put("replyMessage", record.optString("replyMessage", ""));
-            item.put("replyReceivedAt", record.optLong("replyReceivedAt", 0L));
-            output.add(item);
-        }
-        result.success(output);
+                Map<String, Object> item = new HashMap<>(18);
+                item.put("id", record.optString("id", ""));
+                item.put("phone", record.optString("phone", ""));
+                item.put("channel", record.optString("channel", "sms"));
+                item.put("amount", record.optString("amount", ""));
+                item.put("message", record.optString("message", ""));
+                item.put("createdAt", record.optLong("createdAt", 0L));
+                item.put("sentAt", record.optLong("sentAt", 0L));
+                item.put("status", record.optString("status", "pending"));
+                item.put("receivedAt", record.isNull("receivedAt") ? null : record.optLong("receivedAt", 0L));
+                item.put("smsStatus", record.optString("smsStatus", ""));
+                item.put("deliveryStatus", record.optString("deliveryStatus", ""));
+                item.put("orderCode", record.optString("orderCode", ""));
+                item.put("imagePath", record.optString("imagePath", ""));
+                item.put("capturedAt", record.optLong("capturedAt", 0L));
+                item.put("customerReplied", record.optBoolean("customerReplied", false));
+                item.put("replyPhone", record.optString("replyPhone", ""));
+                item.put("replyMessage", record.optString("replyMessage", ""));
+                item.put("replyReceivedAt", record.optLong("replyReceivedAt", 0L));
+                output.add(item);
+            }
+            mainHandler.post(() -> result.success(output));
+        });
     }
 
     private void openPaymentBackupPicker(boolean importing, Result result) {
@@ -1021,12 +1145,16 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
     }
 
     private void getSmsLicenseDetails(Result result) {
-        try {
-            org.json.JSONObject details = LicenseManager.getLicenseDetails(context);
-            result.success(details.toString());
-        } catch (Exception e) {
-            result.error("LICENSE_ERROR", e.getMessage(), null);
-        }
+        final Context appContext = context;
+        backgroundExecutor.execute(() -> {
+            try {
+                org.json.JSONObject details = LicenseManager.getLicenseDetails(appContext);
+                final String json = details.toString();
+                mainHandler.post(() -> result.success(json));
+            } catch (Exception e) {
+                mainHandler.post(() -> result.error("LICENSE_ERROR", e.getMessage(), null));
+            }
+        });
     }
 
     private void applyServerLicenseToken(MethodCall call, Result result) {
@@ -1074,6 +1202,10 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
             return;
         }
         if (activity == null) {
+            result.success(false);
+            return;
+        }
+        if (pendingPermissionResult != null) {
             result.success(false);
             return;
         }
@@ -1129,6 +1261,10 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
             return;
         }
 
+        if (pendingPermissionResult != null) {
+            result.success(false);
+            return;
+        }
         pendingPermissionResult = result;
         ActivityCompat.requestPermissions(activity, new String[]{
             Manifest.permission.READ_CALL_LOG,
@@ -1138,6 +1274,14 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
 
     @Override
     public boolean onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        if (requestCode == CALL_REC_PERMISSION_REQUEST_CODE) {
+            boolean granted = hasCallRecordingPermissionsInternal();
+            if (pendingCallRecPermissionResult != null) {
+                pendingCallRecPermissionResult.success(granted);
+                pendingCallRecPermissionResult = null;
+            }
+            return true;
+        }
         if (requestCode == RECEIVE_SMS_PERMISSION_REQUEST_CODE) {
             boolean granted = grantResults.length > 0
                 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
@@ -1246,8 +1390,6 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
                 }
 
                 ContentResolver resolver = context.getContentResolver();
-                Uri callLogUri = CallLog.Calls.CONTENT_URI;
-
                 String[] projection = {
                     CallLog.Calls._ID,
                     CallLog.Calls.NUMBER,
@@ -1257,10 +1399,17 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
                     CallLog.Calls.TYPE
                 };
 
-                // Tuyệt đối không dùng LIMIT trong sortOrder vì SQLite / ContentProvider Android chặn cú pháp LIMIT trong ORDER BY
                 String sortOrder = CallLog.Calls.DATE + " DESC";
+                Uri limitedUri = CallLog.Calls.CONTENT_URI.buildUpon()
+                    .appendQueryParameter(CallLog.Calls.LIMIT_PARAM_KEY, String.valueOf(maxCount))
+                    .build();
 
-                Cursor cursor = resolver.query(callLogUri, projection, null, null, sortOrder);
+                Cursor cursor;
+                try {
+                    cursor = resolver.query(limitedUri, projection, null, null, sortOrder);
+                } catch (Exception ignored) {
+                    cursor = resolver.query(CallLog.Calls.CONTENT_URI, projection, null, null, sortOrder);
+                }
 
                 if (cursor != null) {
                     List<Map<String, Object>> callLogs = new ArrayList<>();
@@ -1342,11 +1491,353 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
         }
     }
 
+    private boolean hasCallRecordingPermissionsInternal() {
+        if (context == null) return false;
+        boolean hasAudio = androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.RECORD_AUDIO
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        boolean hasPhone = androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.READ_PHONE_STATE
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        boolean hasCallLog = androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.READ_CALL_LOG
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        return hasAudio && hasPhone && hasCallLog;
+    }
+
+    private void hasCallRecordingPermissions(Result result) {
+        result.success(hasCallRecordingPermissionsInternal());
+    }
+
+    private void requestCallRecordingPermissions(Result result) {
+        if (context == null) {
+            result.success(false);
+            return;
+        }
+        java.util.List<String> missing = new java.util.ArrayList<>();
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.RECORD_AUDIO)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            missing.add(android.Manifest.permission.RECORD_AUDIO);
+        }
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.READ_PHONE_STATE)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            missing.add(android.Manifest.permission.READ_PHONE_STATE);
+        }
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.READ_CALL_LOG)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            missing.add(android.Manifest.permission.READ_CALL_LOG);
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                        context, android.Manifest.permission.POST_NOTIFICATIONS)
+                        != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            missing.add(android.Manifest.permission.POST_NOTIFICATIONS);
+        }
+
+        if (missing.isEmpty()) {
+            result.success(true);
+            return;
+        }
+        if (activity == null) {
+            result.success(hasCallRecordingPermissionsInternal());
+            return;
+        }
+        if (pendingCallRecPermissionResult != null) {
+            result.error("PERMISSION_IN_PROGRESS", "Call recording permission request already in progress", null);
+            return;
+        }
+        pendingCallRecPermissionResult = result;
+        androidx.core.app.ActivityCompat.requestPermissions(
+                activity,
+                missing.toArray(new String[0]),
+                CALL_REC_PERMISSION_REQUEST_CODE
+        );
+    }
+
+    private File getBarcodeHistoryFile(Context appContext) {
+        return new File(appContext.getFilesDir(), "barcode_history.json");
+    }
+
+    private void loadBarcodeHistoryJson(Result result) {
+        final Context appContext = context;
+        if (appContext == null) {
+            result.success(null);
+            return;
+        }
+        backgroundExecutor.execute(() -> {
+            String content = null;
+            synchronized (barcodeFileLock) {
+                File file = getBarcodeHistoryFile(appContext);
+                if (file.exists() && file.length() > 0) {
+                    try (FileInputStream fis = new FileInputStream(file)) {
+                        byte[] bytes = new byte[(int) file.length()];
+                        int offset = 0;
+                        while (offset < bytes.length) {
+                            int read = fis.read(bytes, offset, bytes.length - offset);
+                            if (read < 0) break;
+                            offset += read;
+                        }
+                        content = new String(bytes, 0, offset, StandardCharsets.UTF_8);
+                    } catch (Exception e) {
+                        Log.w("CallLogManagerPlugin", "Lỗi đọc barcode_history.json", e);
+                    }
+                }
+            }
+            final String finalContent = content;
+            mainHandler.post(() -> result.success(finalContent));
+        });
+    }
+
+    private void saveBarcodeHistoryJson(MethodCall call, Result result) {
+        final Context appContext = context;
+        final String json = call.argument("json");
+        if (appContext == null || json == null) {
+            result.success(false);
+            return;
+        }
+        backgroundExecutor.execute(() -> {
+            boolean saved = false;
+            synchronized (barcodeFileLock) {
+                File target = getBarcodeHistoryFile(appContext);
+                File tmp = new File(appContext.getFilesDir(), "barcode_history.json.tmp");
+                try (FileOutputStream fos = new FileOutputStream(tmp, false)) {
+                    fos.write(json.getBytes(StandardCharsets.UTF_8));
+                    fos.getFD().sync();
+                    if (tmp.renameTo(target)) {
+                        saved = true;
+                    } else {
+                        try (FileOutputStream fallback = new FileOutputStream(target, false)) {
+                            fallback.write(json.getBytes(StandardCharsets.UTF_8));
+                            saved = true;
+                        }
+                    }
+                } catch (Exception e) {
+                    Log.w("CallLogManagerPlugin", "Lỗi ghi barcode_history.json", e);
+                } finally {
+                    if (tmp.exists()) tmp.delete();
+                }
+            }
+            final boolean finalSaved = saved;
+            mainHandler.post(() -> result.success(finalSaved));
+        });
+    }
+
+    private void openAppDetailsSettings(Result result) {
+        if (context == null) {
+            result.success(false);
+            return;
+        }
+        try {
+            android.content.Intent intent = new android.content.Intent(
+                    android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    android.net.Uri.fromParts("package", context.getPackageName(), null)
+            );
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            context.startActivity(intent);
+            result.success(true);
+        } catch (Exception e) {
+            result.success(false);
+        }
+    }
+
+    private void getCallRecordings(Result result) {
+        if (context == null) {
+            result.success(new java.util.ArrayList<>());
+            return;
+        }
+        backgroundExecutor.execute(() -> {
+            try {
+                java.util.List<java.util.Map<String, Object>> items =
+                        CallRecordingStore.INSTANCE.listRecordings(context);
+                callRecMainHandler.post(() -> result.success(items));
+            } catch (Exception e) {
+                callRecMainHandler.post(() -> result.error("LIST_FAILED", e.getMessage(), null));
+            }
+        });
+    }
+
+    private void stopPlaybackIfFileMissing() {
+        try {
+            java.util.Map<String, Object> state = CallAudioPlayerManager.INSTANCE.getState();
+            Object pathObj = state.get("filePath");
+            if (pathObj instanceof String) {
+                String path = (String) pathObj;
+                if (!path.isEmpty() && !new java.io.File(path).exists()) {
+                    callRecMainHandler.post(() -> CallAudioPlayerManager.INSTANCE.stop());
+                }
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private void deleteCallRecordings(MethodCall call, Result result) {
+        if (context == null) {
+            result.success(0);
+            return;
+        }
+        java.util.List<String> ids = call.argument("ids");
+        if (ids == null || ids.isEmpty()) {
+            result.success(0);
+            return;
+        }
+        backgroundExecutor.execute(() -> {
+            try {
+                int removed = CallRecordingStore.INSTANCE.deleteByIds(context, ids);
+                stopPlaybackIfFileMissing();
+                callRecMainHandler.post(() -> result.success(removed));
+            } catch (Exception e) {
+                callRecMainHandler.post(() -> result.error("DELETE_FAILED", e.getMessage(), null));
+            }
+        });
+    }
+
+    private void deleteCallRecordingsByDate(MethodCall call, Result result) {
+        if (context == null) {
+            result.success(0);
+            return;
+        }
+        String mode = call.argument("mode");
+        Number startNum = call.argument("startMs");
+        Number endNum = call.argument("endMs");
+        if (mode == null || endNum == null) {
+            result.error("INVALID_ARGS", "Missing mode or timestamp bounds", null);
+            return;
+        }
+        long startMs = startNum != null ? startNum.longValue() : 0L;
+        long endMs = endNum.longValue();
+        backgroundExecutor.execute(() -> {
+            try {
+                int removed = CallRecordingStore.INSTANCE.deleteByTimeRange(context, mode, startMs, endMs);
+                stopPlaybackIfFileMissing();
+                callRecMainHandler.post(() -> result.success(removed));
+            } catch (Exception e) {
+                callRecMainHandler.post(() -> result.error("DELETE_FAILED", e.getMessage(), null));
+            }
+        });
+    }
+
+    private void shareCallRecording(MethodCall call, Result result) {
+        if (context == null) {
+            result.error("NO_CONTEXT", "Application context is null", null);
+            return;
+        }
+        String filePath = call.argument("filePath");
+        String title = call.argument("title");
+        if (filePath == null || filePath.trim().isEmpty()) {
+            result.error("INVALID_ARGS", "Missing filePath", null);
+            return;
+        }
+        java.io.File file = new java.io.File(filePath);
+        if (!file.exists()) {
+            result.error("NOT_FOUND", "File ghi âm không tồn tại", null);
+            return;
+        }
+        try {
+            String authority = context.getPackageName() + ".timemark.fileprovider";
+            android.net.Uri uri = androidx.core.content.FileProvider.getUriForFile(context, authority, file);
+            android.content.Intent sendIntent = new android.content.Intent(android.content.Intent.ACTION_SEND);
+            sendIntent.setType("audio/mp4");
+            sendIntent.putExtra(android.content.Intent.EXTRA_STREAM, uri);
+            if (title != null && !title.trim().isEmpty()) {
+                sendIntent.putExtra(android.content.Intent.EXTRA_SUBJECT, title);
+                sendIntent.putExtra(android.content.Intent.EXTRA_TEXT, title);
+            }
+            sendIntent.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            android.content.Intent chooser = android.content.Intent.createChooser(
+                    sendIntent,
+                    (title != null && !title.trim().isEmpty()) ? title : "Chia sẻ file ghi âm"
+            );
+            chooser.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            context.startActivity(chooser);
+            result.success(true);
+        } catch (Exception e) {
+            result.error("SHARE_FAILED", e.getMessage(), null);
+        }
+    }
+
+    private void setCallRecordingAudioSource(MethodCall call, Result result) {
+        if (context == null) {
+            result.success(false);
+            return;
+        }
+        String source = call.argument("source");
+        if (source == null || source.trim().isEmpty()) {
+            source = "auto";
+        }
+        CallRecordingStore.INSTANCE.setAudioSourcePref(context, source.trim());
+        result.success(true);
+    }
+
+    private void playCallRecording(MethodCall call, Result result) {
+        String filePath = call.argument("filePath");
+        if (filePath == null || filePath.trim().isEmpty()) {
+            result.error("INVALID_ARGS", "Missing filePath", null);
+            return;
+        }
+        try {
+            result.success(CallAudioPlayerManager.INSTANCE.play(filePath));
+        } catch (Exception e) {
+            result.error("PLAY_FAILED", e.getMessage(), null);
+        }
+    }
+
+    private void pauseCallRecording(Result result) {
+        try {
+            result.success(CallAudioPlayerManager.INSTANCE.pause());
+        } catch (Exception e) {
+            result.error("PAUSE_FAILED", e.getMessage(), null);
+        }
+    }
+
+    private void resumeCallRecording(Result result) {
+        try {
+            result.success(CallAudioPlayerManager.INSTANCE.resume());
+        } catch (Exception e) {
+            result.error("RESUME_FAILED", e.getMessage(), null);
+        }
+    }
+
+    private void seekCallRecording(MethodCall call, Result result) {
+        Number pos = call.argument("positionMs");
+        int posMs = pos != null ? pos.intValue() : 0;
+        try {
+            result.success(CallAudioPlayerManager.INSTANCE.seekTo(posMs));
+        } catch (Exception e) {
+            result.error("SEEK_FAILED", e.getMessage(), null);
+        }
+    }
+
+    private void stopCallRecording(Result result) {
+        try {
+            result.success(CallAudioPlayerManager.INSTANCE.stop());
+        } catch (Exception e) {
+            result.error("STOP_FAILED", e.getMessage(), null);
+        }
+    }
+
+    private void getCallRecordingPlaybackState(Result result) {
+        try {
+            result.success(CallAudioPlayerManager.INSTANCE.getState());
+        } catch (Exception e) {
+            result.error("STATE_FAILED", e.getMessage(), null);
+        }
+    }
+
     @Override
     public void onDetachedFromEngine(FlutterPluginBinding binding) {
         channel.setMethodCallHandler(null);
         if (paymentTrackingEvents != null) paymentTrackingEvents.setStreamHandler(null);
+        if (callRecordingEvents != null) callRecordingEvents.setStreamHandler(null);
         PaymentTrackingEventBus.setEventSink(null);
+        CallRecordingEventBus.INSTANCE.setEventSink(null);
+        try {
+            CallAudioPlayerManager.INSTANCE.stop();
+        } catch (Exception ignored) {}
         backgroundExecutor.shutdown();
     }
 }

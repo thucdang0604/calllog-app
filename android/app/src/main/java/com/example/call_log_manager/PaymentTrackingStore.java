@@ -91,6 +91,23 @@ final class PaymentTrackingStore {
         return records;
     }
 
+    static synchronized JSONArray getActiveRecords(Context context) {
+        SQLiteDatabase db = database(context);
+        JSONArray records = new JSONArray();
+        try (Cursor cursor = db.query(TABLE, new String[] {"record_json"},
+            "status!=?", new String[] {"done"},
+            null, null, "created_at ASC, rowid ASC")) {
+            while (cursor.moveToNext()) {
+                try {
+                    records.put(new JSONObject(cursor.getString(0)));
+                } catch (JSONException ignored) {
+                    // Skip a corrupt row without hiding the rest of the history.
+                }
+            }
+        }
+        return records;
+    }
+
     static synchronized int importRecords(Context context, JSONArray records) throws JSONException {
         SQLiteDatabase db = database(context);
         int imported = 0;

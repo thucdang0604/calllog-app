@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import '../models/call_recording_item.dart';
+import '../services/call_recording_service.dart';
+import 'call_recordings_screen.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -25,14 +28,29 @@ class _SimpleHomeScreenState extends State<SimpleHomeScreen>
     with WidgetsBindingObserver {
   final AppUpdateService _appUpdateService = AppUpdateService();
   bool _isCallLogDefaultSmsApp = false;
+  StreamSubscription<CallRecordingEvent>? _recordingEventSub;
+  List<CallRecordingItem> _recordings = const [];
+  final ValueNotifier<CallPlaybackState> _playbackStateNotifier =
+      ValueNotifier<CallPlaybackState>(const CallPlaybackState.idle());
+  final ValueNotifier<double?> _homeAudioDragMsNotifier = ValueNotifier<double?>(
+    null,
+  );
+  bool _hasCallRecPerms = true;
+  bool _hasOverlayPerm = true;
+  bool _isRefreshingRecordingState = false;
+  DateTime? _lastUpdateCheckAt;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _recordingEventSub = CallRecordingService.events.listen(
+      _handleRecordingEvent,
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _refreshDefaultSmsStatus();
       _loadCallLogs(force: false);
+      _refreshCallRecordingState();
       _checkForAppUpdate();
     });
   }
@@ -41,15 +59,436 @@ class _SimpleHomeScreenState extends State<SimpleHomeScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _refreshDefaultSmsStatus();
+      _refreshCallRecordingState();
       _appUpdateService.resumePendingInstallation(context);
-      _checkForAppUpdate(delay: false);
+      final now = DateTime.now();
+      if (_lastUpdateCheckAt == null ||
+          now.difference(_lastUpdateCheckAt!) >= const Duration(minutes: 5)) {
+        _checkForAppUpdate(delay: false);
+      }
     }
   }
 
   @override
   void dispose() {
+    _recordingEventSub?.cancel();
+    _playbackStateNotifier.dispose();
+    _homeAudioDragMsNotifier.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  void _handleRecordingEvent(CallRecordingEvent event) {
+    if (!mounted) return;
+    if (event.type == 'recordings_updated') {
+      _reloadRecordingsOnly();
+    } else if (event.type == 'playback' && event.playbackState != null) {
+      _playbackStateNotifier.value = event.playbackState!;
+    }
+  }
+
+  Future<void> _refreshCallRecordingState() async {
+    if (_isRefreshingRecordingState) return;
+    _isRefreshingRecordingState = true;
+    try {
+      final results = await Future.wait<dynamic>([
+        CallRecordingService.hasPermissions(),
+        CallRecordingService.hasOverlayPermission(),
+        CallRecordingService.getRecordings(),
+        CallRecordingService.getPlaybackState(),
+      ]);
+      if (!mounted) return;
+      _playbackStateNotifier.value = results[3] as CallPlaybackState;
+      setState(() {
+        _hasCallRecPerms = results[0] as bool;
+        _hasOverlayPerm = results[1] as bool;
+        _recordings = results[2] as List<CallRecordingItem>;
+      });
+    } finally {
+      _isRefreshingRecordingState = false;
+    }
+  }
+
+  Future<void> _reloadRecordingsOnly() async {
+    final loaded = await CallRecordingService.getRecordings();
+    if (!mounted) return;
+    setState(() {
+      _recordings = loaded;
+    });
+  }
+
+  Future<void> _openCallRecordingsScreen() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const CallRecordingsScreen()),
+    );
+    await _refreshCallRecordingState();
+  }
+
+  Future<void> _requestCallRecPermissionsFromHome() async {
+    final granted = await CallRecordingService.requestPermissions();
+    await _refreshCallRecordingState();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          granted
+              ? 'Đã cấp quyền Micro & Điện thoại cho ghi âm cuộc gọi'
+              : 'Vui lòng cấp quyền Micro & Điện thoại trong Cài đặt ứng dụng',
+        ),
+        backgroundColor: granted ? Colors.green[700] : Colors.orange[800],
+      ),
+    );
+  }
+
+  Future<void> _togglePlayRecording(CallRecordingItem recording) async {
+    try {
+      final current = _playbackStateNotifier.value;
+      if (current.isPlayingFile(recording.filePath)) {
+        final next = await CallRecordingService.pause();
+        if (mounted) _playbackStateNotifier.value = next;
+      } else {
+        final next = await CallRecordingService.play(recording.filePath);
+        if (mounted) _playbackStateNotifier.value = next;
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Không phát được file ghi âm: $e'),
+          backgroundColor: Colors.red[700],
+        ),
+      );
+    }
+  }
+
+  CallRecordingItem? _findRecordingByPath(String filePath) {
+    if (filePath.isEmpty) return null;
+    for (final rec in _recordings) {
+      if (rec.filePath == filePath) {
+        return rec;
+      }
+    }
+    return null;
+  }
+
+  Widget _buildCallRecordingSetupBanner() {
+    if (_hasCallRecPerms && _hasOverlayPerm) {
+      return const SizedBox.shrink();
+    }
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.amber[50],
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.amber[300]!),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.mic, color: Colors.amber[900], size: 18),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'Cấp quyền để hiện nút Ghi âm chủ động trong cuộc gọi',
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.amber[900],
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: _openCallRecordingsScreen,
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('Chi tiết', style: TextStyle(fontSize: 12)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            children: [
+              if (!_hasCallRecPerms)
+                ElevatedButton.icon(
+                  onPressed: _requestCallRecPermissionsFromHome,
+                  icon: const Icon(Icons.mic, size: 15),
+                  label: const Text('Cấp Micro, ĐT & Nhật ký'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue[700],
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    textStyle: const TextStyle(fontSize: 12),
+                  ),
+                ),
+              if (!_hasOverlayPerm)
+                ElevatedButton.icon(
+                  onPressed: CallRecordingService.openOverlaySettings,
+                  icon: const Icon(Icons.layers_outlined, size: 15),
+                  label: const Text('Hiện nút Ghi âm trên cuộc gọi'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.orange[800],
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    textStyle: const TextStyle(fontSize: 12),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHomeInlinePlayer() {
+    return ValueListenableBuilder<CallPlaybackState>(
+      valueListenable: _playbackStateNotifier,
+      builder: (context, playbackState, _) {
+        if (!playbackState.isActive) return const SizedBox.shrink();
+        final activeRec = _findRecordingByPath(playbackState.filePath);
+        final totalMs = playbackState.durationMs > 0
+            ? playbackState.durationMs
+            : (activeRec?.durationMs ?? 1);
+        final safeMax = totalMs > 0 ? totalMs.toDouble() : 1.0;
+
+        return ValueListenableBuilder<double?>(
+          valueListenable: _homeAudioDragMsNotifier,
+          builder: (context, dragMs, _) {
+            final rawPos = dragMs ?? playbackState.positionMs.toDouble();
+            final sliderValue = rawPos.clamp(0.0, safeMax);
+
+            return Container(
+              margin: const EdgeInsets.fromLTRB(16, 4, 16, 6),
+              padding: const EdgeInsets.fromLTRB(12, 8, 6, 4),
+              decoration: BoxDecoration(
+                color: Colors.blue[900],
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.audiotrack, color: Colors.white, size: 16),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          activeRec != null
+                              ? '${activeRec.displayTitle} • ${activeRec.formattedDateTime}'
+                              : 'Đang phát ghi âm cuộc gọi',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: playbackState.isPlaying ? 'Tạm dừng' : 'Tiếp tục',
+                        visualDensity: VisualDensity.compact,
+                        icon: Icon(
+                          playbackState.isPlaying
+                              ? Icons.pause_circle
+                              : Icons.play_circle,
+                          color: Colors.white,
+                          size: 24,
+                        ),
+                        onPressed: () async {
+                          final next = playbackState.isPlaying
+                              ? await CallRecordingService.pause()
+                              : await CallRecordingService.resume();
+                          if (mounted) _playbackStateNotifier.value = next;
+                        },
+                      ),
+                      if (activeRec != null)
+                        IconButton(
+                          tooltip: 'Chia sẻ .m4a',
+                          visualDensity: VisualDensity.compact,
+                          icon: const Icon(
+                            Icons.share,
+                            color: Colors.white70,
+                            size: 18,
+                          ),
+                          onPressed: () =>
+                              CallRecordingService.shareRecording(activeRec),
+                        ),
+                      IconButton(
+                        tooltip: 'Dừng phát',
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.close, color: Colors.white70, size: 20),
+                        onPressed: () async {
+                          final next = await CallRecordingService.stop();
+                          if (mounted) _playbackStateNotifier.value = next;
+                        },
+                      ),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      Text(
+                        CallRecordingItem.formatDurationMs(sliderValue.round()),
+                        style: const TextStyle(color: Colors.white70, fontSize: 11),
+                      ),
+                      Expanded(
+                        child: SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            thumbShape: const RoundSliderThumbShape(
+                              enabledThumbRadius: 5.5,
+                            ),
+                            trackHeight: 2.5,
+                            activeTrackColor: Colors.lightBlueAccent,
+                            inactiveTrackColor: Colors.white24,
+                            thumbColor: Colors.white,
+                          ),
+                          child: Slider(
+                            min: 0,
+                            max: safeMax,
+                            value: sliderValue,
+                            onChangeStart: (v) =>
+                                _homeAudioDragMsNotifier.value = v,
+                            onChanged: (v) => _homeAudioDragMsNotifier.value = v,
+                            onChangeEnd: (v) async {
+                              _homeAudioDragMsNotifier.value = null;
+                              final next = await CallRecordingService.seekTo(
+                                v.round(),
+                              );
+                              if (mounted) _playbackStateNotifier.value = next;
+                            },
+                          ),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: Text(
+                          CallRecordingItem.formatDurationMs(totalMs),
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildCallLeadingWithPlay({
+    required Color typeColor,
+    required IconData typeIcon,
+    required CallRecordingItem? matchedRecording,
+  }) {
+    final typeAvatar = CircleAvatar(
+      backgroundColor: typeColor,
+      radius: matchedRecording != null ? 18 : 22,
+      child: Icon(
+        typeIcon,
+        color: Colors.white,
+        size: matchedRecording != null ? 16 : 18,
+      ),
+    );
+
+    if (matchedRecording == null) {
+      return typeAvatar;
+    }
+
+    return ValueListenableBuilder<CallPlaybackState>(
+      valueListenable: _playbackStateNotifier,
+      builder: (context, playbackState, _) {
+        final isPlaying = playbackState.isPlayingFile(matchedRecording.filePath);
+        final isActive = playbackState.isActiveFile(matchedRecording.filePath);
+
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            typeAvatar,
+            const SizedBox(width: 6),
+            Tooltip(
+              message: isPlaying ? 'Tạm dừng ghi âm' : 'Nghe ghi âm cuộc gọi',
+              child: Material(
+                color: isActive ? Colors.blue[700] : Colors.teal[50],
+                shape: const CircleBorder(),
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: () => _togglePlayRecording(matchedRecording),
+                  child: Padding(
+                    padding: const EdgeInsets.all(6),
+                    child: Icon(
+                      isPlaying ? Icons.pause : Icons.play_arrow,
+                      size: 20,
+                      color: isActive ? Colors.white : Colors.teal[800],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildEmptyCallsRecordingShortcut() {
+    return _buildCallRecordingSummaryBar(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+    );
+  }
+
+  Widget _buildCallRecordingSummaryBar({
+    EdgeInsets padding = const EdgeInsets.only(bottom: 8),
+  }) {
+    return Padding(
+      padding: padding,
+      child: Row(
+        children: [
+          Icon(Icons.mic_none, size: 15, color: Colors.teal[700]),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text(
+              'Ghi âm chủ động từng cuộc gọi • Tự xóa sau 30 ngày',
+              style: TextStyle(fontSize: 11.5, color: Colors.grey[700]),
+            ),
+          ),
+          TextButton.icon(
+            onPressed: _openCallRecordingsScreen,
+            icon: const Icon(Icons.library_music, size: 16),
+            label: Text(
+              'Kho ghi âm (${_recordings.length})',
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.blue[700],
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _checkForAppUpdate({
@@ -58,6 +497,7 @@ class _SimpleHomeScreenState extends State<SimpleHomeScreen>
   }) async {
     if (delay) await Future<void>.delayed(const Duration(seconds: 3));
     if (!mounted) return;
+    _lastUpdateCheckAt = DateTime.now();
     await _appUpdateService.checkForUpdate(context, forceCheck: forceCheck);
   }
 
@@ -175,64 +615,6 @@ class _SimpleHomeScreenState extends State<SimpleHomeScreen>
       ),
       body: Consumer<CallLogProvider>(
         builder: (context, provider, child) {
-          if (provider.isLoading) {
-            return const Center(child: CircularProgressIndicator());
-          }
-
-          if (provider.hasError) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.error, size: 64, color: Colors.red[300]),
-                  const SizedBox(height: 16),
-                  Text(
-                    provider.errorMessage,
-                    style: const TextStyle(fontSize: 16, color: Colors.red),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 16),
-                  ElevatedButton(
-                    onPressed: () => _loadCallLogs(force: true),
-                    child: const Text('Thử lại'),
-                  ),
-                ],
-              ),
-            );
-          }
-
-          if (!provider.hasPermission) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.security, size: 64, color: Colors.orange[300]),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Cần cấp quyền',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Ứng dụng cần quyền đọc nhật ký cuộc gọi',
-                    style: TextStyle(fontSize: 14, color: Colors.grey),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 24),
-                  ElevatedButton(
-                    onPressed: () async {
-                      await provider.requestPermission();
-                      if (provider.hasPermission) {
-                        await _loadCallLogs(force: true);
-                      }
-                    },
-                    child: const Text('Cấp quyền'),
-                  ),
-                ],
-              ),
-            );
-          }
-
           return SingleChildScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 24),
@@ -271,7 +653,11 @@ class _SimpleHomeScreenState extends State<SimpleHomeScreen>
                     ),
                     children: [
                       const FloatingWindowWidget(),
+                      _buildCallRecordingSetupBanner(),
                       _buildLatestCallsPreview(provider),
+                      if (provider.getLatestCalls(count: 4).isEmpty)
+                        _buildEmptyCallsRecordingShortcut(),
+                      _buildHomeInlinePlayer(),
                       const SizedBox(height: 8),
                     ],
                   ),
@@ -458,6 +844,98 @@ class _SimpleHomeScreenState extends State<SimpleHomeScreen>
 
   /// Hiển thị các cuộc gọi gần nhất
   Widget _buildLatestCallsPreview(CallLogProvider provider) {
+    if (provider.isLoading && provider.allCallLogs.isEmpty) {
+      return Container(
+        margin: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.grey[50],
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.grey.shade200),
+        ),
+        child: Row(
+          children: [
+            const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              'Đang tải nhật ký cuộc gọi...',
+              style: TextStyle(color: Colors.grey[700], fontSize: 13.5),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (provider.hasError) {
+      return Container(
+        margin: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.red[50],
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.red.shade200),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.error_outline, color: Colors.red[700], size: 22),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                provider.errorMessage,
+                style: TextStyle(color: Colors.red[900], fontSize: 13),
+              ),
+            ),
+            TextButton(
+              onPressed: () => _loadCallLogs(force: true),
+              child: const Text('Thử lại'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (!provider.hasPermission) {
+      return Container(
+        margin: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.orange[50],
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.orange.shade200),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.security, color: Colors.orange[800], size: 22),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Text(
+                'Cấp quyền đọc nhật ký để hiển thị 4 cuộc gọi gần nhất.',
+                style: TextStyle(fontSize: 13),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                final granted = await provider.requestPermission();
+                if (granted) {
+                  await _loadCallLogs(force: true);
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orange[800],
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              ),
+              child: const Text('Cấp quyền', style: TextStyle(fontSize: 12.5)),
+            ),
+          ],
+        ),
+      );
+    }
+
     final latestCalls = provider.getLatestCalls(count: 4);
 
     if (latestCalls.isEmpty) {
@@ -503,6 +981,7 @@ class _SimpleHomeScreenState extends State<SimpleHomeScreen>
               ],
             ),
           ),
+          _buildCallRecordingSummaryBar(),
           ...latestCalls.map(
             (call) => Card(
               margin: const EdgeInsets.only(bottom: 8),
@@ -511,13 +990,14 @@ class _SimpleHomeScreenState extends State<SimpleHomeScreen>
                 borderRadius: BorderRadius.circular(10),
               ),
               child: ListTile(
-                leading: CircleAvatar(
-                  backgroundColor: _getCallTypeColor(call.callType),
-                  radius: 22,
-                  child: Icon(
-                    _getCallTypeIcon(call.callType),
-                    color: Colors.white,
-                    size: 18,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+                horizontalTitleGap: 10,
+                leading: _buildCallLeadingWithPlay(
+                  typeColor: _getCallTypeColor(call.callType),
+                  typeIcon: _getCallTypeIcon(call.callType),
+                  matchedRecording: CallRecordingService.matchRecordingForCall(
+                    call,
+                    _recordings,
                   ),
                 ),
                 title: Text(

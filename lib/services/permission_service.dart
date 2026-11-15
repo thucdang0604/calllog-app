@@ -7,8 +7,27 @@ class PermissionService {
   factory PermissionService() => _instance;
   PermissionService._internal();
 
+  /// Kiểm tra nhanh xem đã có quyền đọc/ghi call log hay chưa (không bật popup hay mở Cài đặt)
+  Future<bool> hasCallLogPermission() async {
+    try {
+      final hasNativePermission = await NativeCallLogService.hasPermission();
+      if (hasNativePermission) {
+        return true;
+      }
+    } catch (_) {}
+
+    try {
+      final phoneStatus = await Permission.phone.status;
+      return phoneStatus.isGranted;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Kiểm tra và yêu cầu quyền đọc và ghi call log
-  Future<bool> requestCallLogPermission() async {
+  Future<bool> requestCallLogPermission({
+    bool openSettingsIfPermanentlyDenied = false,
+  }) async {
     try {
       // 1. Kiểm tra / Yêu cầu quyền trực tiếp từ native Android plugin (READ_CALL_LOG & WRITE_CALL_LOG)
       final hasNativePermission = await NativeCallLogService.hasPermission();
@@ -36,8 +55,8 @@ class PermissionService {
       return result.isGranted;
     }
 
-    if (phoneStatus.isPermanentlyDenied) {
-      // Mở settings để user có thể cấp quyền thủ công
+    if (phoneStatus.isPermanentlyDenied && openSettingsIfPermanentlyDenied) {
+      // Chỉ mở Cài đặt khi người dùng chủ động bấm nút "Cấp quyền", tránh văng app lúc mới mở
       await openAppSettings();
       return false;
     }

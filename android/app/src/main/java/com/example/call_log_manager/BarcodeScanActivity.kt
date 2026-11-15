@@ -76,6 +76,9 @@ class BarcodeScanActivity : AppCompatActivity() {
         private const val WEBP_QUALITY = 75
         private const val PHOTO_FLUSH_TIMEOUT_MS = 1500L
 
+        const val EXTRA_EXISTING_PENDING_CODES = "existing_pending_codes"
+        const val EXTRA_EXISTING_SHARED_CODES = "existing_shared_codes"
+
         // Allow alphanumeric characters with optional single '.', '-', '_' separators inside
         // (e.g. AVN90452708-1.1, 38861094_402533213) while rejecting leading/trailing symbols or noise.
         private val ONE_D_CODE_REGEX = Regex("^[A-Za-z0-9]+([._-][A-Za-z0-9]+)*$")
@@ -136,12 +139,23 @@ class BarcodeScanActivity : AppCompatActivity() {
 
     private val scannedCodesList = ArrayList<JSONObject>()
     private val candidateHits = HashMap<String, MutableList<Long>>()
+    private var existingPendingCodes: Set<String> = emptySet()
+    private var existingSharedCodes: Set<String> = emptySet()
     private var lastScannedCode: String = ""
     private var lastScannedTime: Long = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_barcode_scan)
+
+        existingPendingCodes = intent.getStringArrayListExtra(EXTRA_EXISTING_PENDING_CODES)
+            ?.mapNotNull { it?.trim()?.takeIf(String::isNotEmpty) }
+            ?.toSet()
+            ?: emptySet()
+        existingSharedCodes = intent.getStringArrayListExtra(EXTRA_EXISTING_SHARED_CODES)
+            ?.mapNotNull { it?.trim()?.takeIf(String::isNotEmpty) }
+            ?.toSet()
+            ?: emptySet()
 
         initViews()
         checkAndStartCamera()
@@ -513,8 +527,11 @@ class BarcodeScanActivity : AppCompatActivity() {
         lastScannedTime = now
 
         // Check if duplicate in the whole current session
-        val isDuplicate = scannedCodesList.any { it.optString("code") == rawCode }
-        if (!isDuplicate) {
+        val isDuplicateInSession = scannedCodesList.any { it.optString("code") == rawCode }
+        val inSharedHistory = existingSharedCodes.contains(rawCode)
+        val inPendingHistory = existingPendingCodes.contains(rawCode)
+
+        if (!isDuplicateInSession) {
             var savedImagePath: String? = null
             if (isSavePhotoEnabled && !photoExecutor.isShutdown) {
                 val frame = extractYuvFrame(mediaImage, rotationDegrees)
@@ -539,6 +556,7 @@ class BarcodeScanActivity : AppCompatActivity() {
             }
 
             val obj = JSONObject().apply {
+                put("id", "${rawCode}_${now}_${scannedCodesList.size}")
                 put("code", rawCode)
                 put("format", format)
                 put("timestamp", now)
@@ -550,11 +568,26 @@ class BarcodeScanActivity : AppCompatActivity() {
         }
 
         mainHandler.post {
-            playFeedback()
+            playFeedback(isExistingDuplicate = inSharedHistory || inPendingHistory)
 
-            val prefix = if (isDuplicate) "🔁 Đã có: " else "✅ Đã quét: "
+            val (prefix, textColor) = when {
+                inSharedHistory -> "⚠️ Đã ở Đã chia sẻ: " to 0xFFFFB74D.toInt()
+                isDuplicateInSession -> "🔁 Đã quét phiên này: " to 0xFFE0E0E0.toInt()
+                inPendingHistory -> "🔁 Đã có hôm nay: " to 0xFFFFF176.toInt()
+                else -> "✅ Mã mới: " to 0xFFFFFFFF.toInt()
+            }
+            tvLastScanned.setTextColor(textColor)
             tvLastScanned.text = "$prefix$rawCode\n($format)"
-            tvCounter.text = "Đã quét: ${scannedCodesList.size} mã"
+
+            val existingDupCount = scannedCodesList.count {
+                val c = it.optString("code")
+                existingSharedCodes.contains(c) || existingPendingCodes.contains(c)
+            }
+            tvCounter.text = if (existingDupCount > 0) {
+                "Đã quét: ${scannedCodesList.size} ($existingDupCount trùng)"
+            } else {
+                "Đã quét: ${scannedCodesList.size} mã"
+            }
             btnDone.text = "✓ Hoàn tất (${scannedCodesList.size})"
 
             // Laser line animation
@@ -723,7 +756,7 @@ class BarcodeScanActivity : AppCompatActivity() {
         }
     }
 
-    private fun playFeedback() {
+    private fun playFeedback(isExistingDuplicate: Boolean = false) {
         try {
             shutterSound?.play(MediaActionSound.SHUTTER_CLICK)
         } catch (_: Exception) {}
@@ -737,10 +770,18 @@ class BarcodeScanActivity : AppCompatActivity() {
                 getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                vibrator?.vibrate(VibrationEffect.createOneShot(45, VibrationEffect.DEFAULT_AMPLITUDE))
+                if (isExistingDuplicate) {
+                    vibrator?.vibrate(
+                        VibrationEffect.createWaveform(longArrayOf(0L, 45L, 65L, 45L), -1)
+                    )
+                } else {
+                    vibrator?.vibrate(
+                        VibrationEffect.createOneShot(45, VibrationEffect.DEFAULT_AMPLITUDE)
+                    )
+                }
             } else {
                 @Suppress("DEPRECATION")
-                vibrator?.vibrate(45)
+                vibrator?.vibrate(if (isExistingDuplicate) 90 else 45)
             }
         } catch (_: Exception) {}
     }

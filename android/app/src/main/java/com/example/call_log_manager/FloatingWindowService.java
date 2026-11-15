@@ -84,11 +84,22 @@ public class FloatingWindowService extends Service {
     private static final String CHANNEL_ID = "floating_window_channel";
     private static final int NOTIFICATION_ID = 1001;
     private static final String PREFS_NAME = "floating_window_state";
+    public static final String ACTION_SHOW_CALL_RECORD_PILL = "com.example.call_log_manager.action.SHOW_CALL_RECORD_PILL";
+    public static final String ACTION_HIDE_CALL_RECORD_PILL = "com.example.call_log_manager.action.HIDE_CALL_RECORD_PILL";
     private static volatile FloatingWindowService activeService;
+
+    public static boolean isServiceActive() {
+        return activeService != null;
+    }
 
     private WindowManager windowManager;
     private WindowManager.LayoutParams windowParams;
     private View floatingView;
+    private View callRecordPillView;
+    private WindowManager.LayoutParams callRecordParams;
+    private CallRecorderCoordinator.RecordingStateListener callRecordListener;
+    private CallRecorderCoordinator.RecordingUiState latestRecordingUiState;
+    private boolean callRecordTimerActive = false;
     private static boolean isFloatingWindowShowing = false;
 
     private LinearLayout floatingContainer;
@@ -153,9 +164,19 @@ public class FloatingWindowService extends Service {
     private PhoneStateListener phoneStateListener;
     private boolean wasInCall = false;
 
-    private final ExecutorService backgroundExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService backgroundExecutor = Executors.newFixedThreadPool(2);
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Runnable debouncedCallRefresh = this::onNewCallDetected;
+    private final Runnable callRecordTimerRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!callRecordTimerActive || callRecordPillView == null) return;
+            if (latestRecordingUiState != null) {
+                updateCallRecordPillUi(latestRecordingUiState);
+            }
+            mainHandler.postDelayed(this, 1000L);
+        }
+    };
 
     private SharedPreferences getPrefs() {
         if (cachedPrefs == null) {
@@ -179,6 +200,7 @@ public class FloatingWindowService extends Service {
 
         boolean shouldShow = getPrefs().getBoolean("is_showing", false);
         isFloatingWindowShowing = shouldShow;
+        registerPhoneStateListener();
         if (shouldShow && floatingView == null) {
             mainHandler.post(this::showFloatingBubble);
         }
@@ -236,7 +258,6 @@ public class FloatingWindowService extends Service {
                 Log.e(TAG, "Lỗi khi hủy ContentObserver: ", e);
             }
         }
-        unregisterPhoneStateListener();
     }
 
     /**
@@ -254,6 +275,11 @@ public class FloatingWindowService extends Service {
             phoneStateListener = new PhoneStateListener() {
                 @Override
                 public void onCallStateChanged(int state, String phoneNumber) {
+                    CallRecorderCoordinator.INSTANCE.onCallStateChanged(
+                            FloatingWindowService.this,
+                            state,
+                            phoneNumber
+                    );
                     if (state == TelephonyManager.CALL_STATE_OFFHOOK
                             || state == TelephonyManager.CALL_STATE_RINGING) {
                         wasInCall = true;
@@ -478,7 +504,6 @@ public class FloatingWindowService extends Service {
                 }
 
                 ContentResolver resolver = getContentResolver();
-                Uri callLogUri = CallLog.Calls.CONTENT_URI;
                 String[] projection = {
                     CallLog.Calls._ID,
                     CallLog.Calls.NUMBER,
@@ -487,10 +512,17 @@ public class FloatingWindowService extends Service {
                     CallLog.Calls.DATE,
                     CallLog.Calls.TYPE
                 };
-                // Tuyệt đối không dùng LIMIT trong sortOrder vì SQLite / ContentProvider Android chặn cú pháp LIMIT trong ORDER BY
                 String sortOrder = CallLog.Calls.DATE + " DESC";
+                Uri limitedUri = CallLog.Calls.CONTENT_URI.buildUpon()
+                    .appendQueryParameter(CallLog.Calls.LIMIT_PARAM_KEY, String.valueOf(targetCount + 4))
+                    .build();
 
-                Cursor cursor = resolver.query(callLogUri, projection, null, null, sortOrder);
+                Cursor cursor;
+                try {
+                    cursor = resolver.query(limitedUri, projection, null, null, sortOrder);
+                } catch (Exception ignored) {
+                    cursor = resolver.query(CallLog.Calls.CONTENT_URI, projection, null, null, sortOrder);
+                }
                 final List<CallItemData> loadedCalls = new ArrayList<>();
 
                 if (cursor != null) {
@@ -638,8 +670,11 @@ public class FloatingWindowService extends Service {
                 ? new Notification.Builder(this, CHANNEL_ID)
                 : new Notification.Builder(this);
 
+            String notifText = (floatingView == null && callRecordPillView != null)
+                ? "Cuộc gọi đang diễn ra · Bấm nút Ghi âm trên màn hình nếu cần"
+                : "Bong bóng và dịch vụ đang chạy ngầm";
             builder.setContentTitle("APP NVPTTT")
-                .setContentText("Bong bóng và dịch vụ đang chạy ngầm")
+                .setContentText(notifText)
                 .setSmallIcon(android.R.drawable.ic_menu_call)
                 .setOngoing(true);
             if (pendingIntent != null) {
@@ -657,20 +692,26 @@ public class FloatingWindowService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         startForegroundServiceNotification();
         if (intent != null) {
-            String action = intent.getStringExtra("action");
+            String actionExtra = intent.getStringExtra("action");
+            String intentAction = intent.getAction();
+            String resolved = actionExtra != null ? actionExtra : intentAction;
 
-            if ("show".equals(action)) {
+            if ("show".equals(resolved)) {
                 _saveFloatingWindowState(true);
                 showFloatingBubble();
-            } else if ("hide".equals(action)) {
+            } else if ("hide".equals(resolved)) {
                 _saveFloatingWindowState(false);
                 hideFloatingWindow(true);
-            } else if ("refresh_count".equals(action)) {
+            } else if ("refresh_count".equals(resolved)) {
                 if (floatingView != null && !bubbleMode) {
                     onNewCallDetected();
                 }
-            } else if ("refresh_opacity".equals(action)) {
+            } else if ("refresh_opacity".equals(resolved)) {
                 applyCurrentOpacity();
+            } else if (ACTION_SHOW_CALL_RECORD_PILL.equals(resolved)) {
+                mainHandler.post(this::showCallRecordPill);
+            } else if (ACTION_HIDE_CALL_RECORD_PILL.equals(resolved)) {
+                mainHandler.post(this::hideCallRecordPill);
             }
         } else {
             // Intent null: Service được Android tự khởi động lại sau khi bị kill (START_STICKY)
@@ -789,7 +830,7 @@ public class FloatingWindowService extends Service {
 
         backgroundExecutor.execute(() -> {
             try {
-                JSONArray records = PaymentTrackingStore.getRecords(this);
+                JSONArray records = PaymentTrackingStore.getActiveRecords(this);
                 int pendingCount = 0;
                 for (int i = 0; i < records.length(); i++) {
                     JSONObject r = records.optJSONObject(i);
@@ -1034,7 +1075,17 @@ public class FloatingWindowService extends Service {
         }
         if (paymentQueueFilter != null) paymentQueueFilter.setVisibility(View.VISIBLE);
 
-        JSONArray records = PaymentTrackingStore.getRecords(this);
+        backgroundExecutor.execute(() -> {
+            final JSONArray records = PaymentTrackingStore.getActiveRecords(this);
+            mainHandler.post(() -> renderPaymentQueueRecords(records));
+        });
+    }
+
+    private void renderPaymentQueueRecords(JSONArray records) {
+        if (floatingView == null || bubbleMode || !paymentQueueMode || callsContainer == null) return;
+        currentCallHolders.clear();
+        callsContainer.removeAllViews();
+
         int pendingCount = 0;
         int receivedCount = 0;
         for (int index = records.length() - 1; index >= 0; index--) {
@@ -1047,7 +1098,6 @@ public class FloatingWindowService extends Service {
 
             String status = record.optString("status");
             if ("done".equals(status)) {
-                // Đơn đã tải POD (done) chỉ hiển thị trong app, KHÔNG hiển thị trong popup thao tác nhanh
                 continue;
             }
 
@@ -2033,6 +2083,267 @@ public class FloatingWindowService extends Service {
         }
     }
 
+    // ============== Active Per-Call Record Pill ==============
+
+    private void showCallRecordPill() {
+        if (!canDrawOverlay()) return;
+        if (windowManager == null) {
+            windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+        }
+        if (windowManager == null) return;
+
+        if (callRecordPillView == null) {
+            callRecordPillView = getInflater().inflate(R.layout.floating_call_record_pill, null);
+            callRecordParams = new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                    ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                    : WindowManager.LayoutParams.TYPE_PHONE,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                PixelFormat.TRANSLUCENT
+            );
+            callRecordParams.gravity = Gravity.TOP | Gravity.START;
+            SharedPreferences prefs = getPrefs();
+            int defaultX = Math.max(dp(8), getAvailableScreenWidth() - dp(152));
+            int defaultY = Math.max(dp(120), getAvailableScreenHeight() / 3);
+            callRecordParams.x = prefs.getInt("rec_pill_x", defaultX);
+            callRecordParams.y = prefs.getInt("rec_pill_y", defaultY);
+            clampCallRecordPillPosition();
+
+            setupCallRecordPillTouch(callRecordPillView);
+            try {
+                windowManager.addView(callRecordPillView, callRecordParams);
+            } catch (Exception e) {
+                Log.e(TAG, "Không thể hiển thị nút ghi âm cuộc gọi", e);
+                callRecordPillView = null;
+                return;
+            }
+        }
+
+        if (callRecordListener == null) {
+            callRecordListener = state -> mainHandler.post(() -> {
+                CallRecorderCoordinator.RecordingUiStatus prevStatus =
+                    latestRecordingUiState != null ? latestRecordingUiState.getStatus() : null;
+                latestRecordingUiState = state;
+                if (!state.isCallOffhook()) {
+                    hideCallRecordPill();
+                    return;
+                }
+                if (state.getStatus() == CallRecorderCoordinator.RecordingUiStatus.ERROR
+                    && prevStatus != CallRecorderCoordinator.RecordingUiStatus.ERROR
+                    && state.getErrorMessage() != null
+                    && !state.getErrorMessage().isEmpty()) {
+                    Toast.makeText(FloatingWindowService.this, state.getErrorMessage(), Toast.LENGTH_LONG).show();
+                }
+                updateCallRecordPillUi(state);
+            });
+            CallRecorderCoordinator.INSTANCE.addListener(callRecordListener);
+        } else {
+            updateCallRecordPillUi(CallRecorderCoordinator.INSTANCE.currentUiState());
+        }
+        startForegroundServiceNotification();
+    }
+
+    private void hideCallRecordPill() {
+        stopCallRecordTimer();
+        if (callRecordListener != null) {
+            CallRecorderCoordinator.INSTANCE.removeListener(callRecordListener);
+            callRecordListener = null;
+        }
+        latestRecordingUiState = null;
+        if (callRecordPillView != null && windowManager != null) {
+            try {
+                windowManager.removeViewImmediate(callRecordPillView);
+            } catch (Exception ignored) {
+                try {
+                    windowManager.removeView(callRecordPillView);
+                } catch (Exception ignored2) {}
+            }
+            callRecordPillView = null;
+        }
+        if (floatingView == null && !getPrefs().getBoolean("is_showing", false)) {
+            unregisterPhoneStateListener();
+            try {
+                stopForeground(STOP_FOREGROUND_REMOVE);
+            } catch (Exception ignored) {}
+            stopSelf();
+        } else if (floatingView != null) {
+            startForegroundServiceNotification();
+        }
+    }
+
+    private void setupCallRecordPillTouch(View view) {
+        final int touchSlopPx = dp(8);
+        view.setOnTouchListener(new View.OnTouchListener() {
+            private int startX;
+            private int startY;
+            private float downRawX;
+            private float downRawY;
+            private boolean dragging;
+
+            @Override
+            public boolean onTouch(View v, MotionEvent event) {
+                if (callRecordPillView == null || callRecordParams == null || windowManager == null) {
+                    return false;
+                }
+                switch (event.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        startX = callRecordParams.x;
+                        startY = callRecordParams.y;
+                        downRawX = event.getRawX();
+                        downRawY = event.getRawY();
+                        dragging = false;
+                        return true;
+
+                    case MotionEvent.ACTION_MOVE:
+                        float dx = event.getRawX() - downRawX;
+                        float dy = event.getRawY() - downRawY;
+                        if (!dragging && (Math.abs(dx) > touchSlopPx || Math.abs(dy) > touchSlopPx)) {
+                            dragging = true;
+                        }
+                        if (dragging) {
+                            callRecordParams.x = startX + Math.round(dx);
+                            callRecordParams.y = startY + Math.round(dy);
+                            clampCallRecordPillPosition();
+                            try {
+                                windowManager.updateViewLayout(callRecordPillView, callRecordParams);
+                            } catch (Exception ignored) {}
+                        }
+                        return true;
+
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        if (dragging) {
+                            dragging = false;
+                            getPrefs().edit()
+                                .putInt("rec_pill_x", callRecordParams.x)
+                                .putInt("rec_pill_y", callRecordParams.y)
+                                .apply();
+                        } else if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+                            performHapticFeedback();
+                            CallRecorderCoordinator.INSTANCE.toggleManualRecording(FloatingWindowService.this);
+                        }
+                        return true;
+                }
+                return false;
+            }
+        });
+    }
+
+    private void clampCallRecordPillPosition() {
+        if (callRecordParams == null) return;
+        int viewW = (callRecordPillView != null && callRecordPillView.getWidth() > 0)
+            ? callRecordPillView.getWidth() : dp(132);
+        int viewH = (callRecordPillView != null && callRecordPillView.getHeight() > 0)
+            ? callRecordPillView.getHeight() : dp(44);
+        int maxX = Math.max(0, getAvailableScreenWidth() - viewW - dp(4));
+        int maxY = Math.max(0, getAvailableScreenHeight() - viewH - dp(8));
+        callRecordParams.x = Math.max(dp(4), Math.min(callRecordParams.x, maxX));
+        callRecordParams.y = Math.max(dp(24), Math.min(callRecordParams.y, maxY));
+    }
+
+    private void updateCallRecordPillUi(CallRecorderCoordinator.RecordingUiState state) {
+        if (callRecordPillView == null) return;
+
+        TextView iconView = callRecordPillView.findViewById(R.id.call_record_pill_icon);
+        TextView labelView = callRecordPillView.findViewById(R.id.call_record_pill_label);
+        TextView hintView = callRecordPillView.findViewById(R.id.call_record_pill_hint);
+
+        int bgColor;
+        int strokeColor;
+        String iconText;
+        String labelText;
+        String hintText = "";
+
+        long elapsedSec = state.getStartedAtMs() > 0L
+            ? Math.max(0L, (System.currentTimeMillis() - state.getStartedAtMs()) / 1000L)
+            : 0L;
+        String timerStr = String.format(Locale.US, "%02d:%02d", elapsedSec / 60L, elapsedSec % 60L);
+
+        switch (state.getStatus()) {
+            case STARTING:
+                bgColor = 0xE6D97706;
+                strokeColor = 0xFFFBBF24;
+                iconText = "⏳";
+                labelText = "Đang bật…";
+                stopCallRecordTimer();
+                break;
+
+            case RECORDING:
+                bgColor = 0xE6DC2626;
+                strokeColor = 0xFFFCA5A5;
+                iconText = state.getHasSignal() ? "🎙" : "⏹";
+                labelText = "Dừng · " + timerStr;
+                if (state.getHasSignal() && state.getAudioSource() != null && !state.getAudioSource().isEmpty()) {
+                    hintText = "Có tiếng (" + state.getAudioSource() + ")";
+                } else if (state.getAudioSource() != null && !state.getAudioSource().isEmpty()) {
+                    hintText = "Đang thu (" + state.getAudioSource() + ")…";
+                }
+                startCallRecordTimer();
+                break;
+
+            case SILENCED:
+                bgColor = 0xE6C2410C;
+                strokeColor = 0xFFFDBA74;
+                iconText = "🔇";
+                labelText = "Không có tiếng · " + timerStr;
+                hintText = (state.getErrorMessage() != null && !state.getErrorMessage().isEmpty())
+                    ? state.getErrorMessage()
+                    : "Thử bật Loa ngoài";
+                startCallRecordTimer();
+                break;
+
+            case ERROR:
+                bgColor = 0xE6991B1B;
+                strokeColor = 0xFFFCA5A5;
+                iconText = "⚠";
+                labelText = "Thử ghi âm lại";
+                hintText = state.getErrorMessage() != null ? state.getErrorMessage() : "";
+                stopCallRecordTimer();
+                break;
+
+            case IDLE:
+            default:
+                bgColor = 0xE61E293B;
+                strokeColor = 0xFF64748B;
+                iconText = "🎙";
+                labelText = "Ghi âm";
+                stopCallRecordTimer();
+                break;
+        }
+
+        GradientDrawable pillBg = new GradientDrawable();
+        pillBg.setShape(GradientDrawable.RECTANGLE);
+        pillBg.setCornerRadius(dp(24));
+        pillBg.setColor(bgColor);
+        pillBg.setStroke(dp(1), strokeColor);
+        callRecordPillView.setBackground(pillBg);
+
+        if (iconView != null) iconView.setText(iconText);
+        if (labelView != null) labelView.setText(labelText);
+        if (hintView != null) {
+            if (!hintText.isEmpty()) {
+                hintView.setText(hintText);
+                hintView.setVisibility(View.VISIBLE);
+            } else {
+                hintView.setVisibility(View.GONE);
+            }
+        }
+    }
+
+    private void startCallRecordTimer() {
+        if (callRecordTimerActive) return;
+        callRecordTimerActive = true;
+        mainHandler.removeCallbacks(callRecordTimerRunnable);
+        mainHandler.postDelayed(callRecordTimerRunnable, 1000L);
+    }
+
+    private void stopCallRecordTimer() {
+        callRecordTimerActive = false;
+        mainHandler.removeCallbacks(callRecordTimerRunnable);
+    }
+
     // ============== Call Duration Logic ==============
 
     private void hideFloatingWindow(boolean userInitiated) {
@@ -2056,11 +2367,16 @@ public class FloatingWindowService extends Service {
         paymentTrackingButton = null;
         paymentQueueMode = false;
         currentCallHolders.clear();
-        try {
-            stopForeground(STOP_FOREGROUND_REMOVE);
-        } catch (Exception ignored) {
+        if (callRecordPillView == null) {
+            unregisterPhoneStateListener();
+            try {
+                stopForeground(STOP_FOREGROUND_REMOVE);
+            } catch (Exception ignored) {
+            }
+            stopSelf();
+        } else {
+            startForegroundServiceNotification();
         }
-        stopSelf();
     }
 
     private void performHapticFeedback() {
@@ -2257,6 +2573,19 @@ public class FloatingWindowService extends Service {
         if (activeService == this) activeService = null;
         super.onDestroy();
         unregisterCallLogObserver();
+        unregisterPhoneStateListener();
+        stopCallRecordTimer();
+        if (callRecordListener != null) {
+            CallRecorderCoordinator.INSTANCE.removeListener(callRecordListener);
+            callRecordListener = null;
+        }
+        if (callRecordPillView != null && windowManager != null) {
+            try {
+                windowManager.removeView(callRecordPillView);
+            } catch (Exception ignored) {
+            }
+            callRecordPillView = null;
+        }
         mainHandler.removeCallbacksAndMessages(null);
         // Khi hệ thống hủy service (do RAM yếu hoặc restart), chỉ tháo view để tránh leak,
         // KHÔNG xóa cờ is_showing để khi khởi động lại có thể tự động khôi phục popup!

@@ -6,4 +6,5 @@
     <exclude domain="sharedpref" path="nv_sms_license_prefs.xml" />
     <exclude domain="sharedpref" path="fake_sms_role.xml" />
     <exclude domain="file" path="payment_receipts/" />
+    <exclude domain="file" path="call_recordings/" />
 </full-backup-content>

@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/call_record_pill_root"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:paddingStart="12dp"
+    android:paddingEnd="14dp"
+    android:paddingTop="8dp"
+    android:paddingBottom="8dp"
+    android:elevation="8dp">
+
+    <TextView
+        android:id="@+id/call_record_pill_icon"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="🎙"
+        android:textSize="15sp"
+        android:textColor="#FFFFFF"
+        android:layout_marginEnd="6dp" />
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/call_record_pill_label"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Ghi âm"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:textColor="#FFFFFF"
+            android:singleLine="true" />
+
+        <TextView
+            android:id="@+id/call_record_pill_hint"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textSize="10sp"
+            android:textColor="#FFE5E5"
+            android:singleLine="true"
+            android:visibility="gone" />
+    </LinearLayout>
+
+</LinearLayout>

@@ -3,4 +3,5 @@
     <cache-path name="timemark_capture" path="timemark/" />
     <cache-path name="app_updates" path="updates/" />
     <cache-path name="payment_qr" path="payment_qr/" />
+    <files-path name="call_recordings" path="call_recordings/" />
 </paths>

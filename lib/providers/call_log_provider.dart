@@ -11,6 +11,7 @@ class CallLogProvider with ChangeNotifier {
   bool _hasError = false;
   String _errorMessage = '';
   bool _hasPermission = false;
+  bool _promptedPermissionOnSession = false;
 
   // Getters
   List<CallLogEntry> get allCallLogs => _allCallLogs;
@@ -30,7 +31,13 @@ class CallLogProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      final hasPermission = await _callLogService.hasPermission();
+      var hasPermission = await _callLogService.hasPermission();
+      if (!hasPermission && !_promptedPermissionOnSession) {
+        _promptedPermissionOnSession = true;
+        hasPermission = await _callLogService.requestPermission(
+          openSettingsIfPermanentlyDenied: false,
+        );
+      }
 
       if (!hasPermission) {
         _hasPermission = false;
@@ -47,7 +54,7 @@ class CallLogProvider with ChangeNotifier {
         _callLogService.clearCache();
       }
 
-      final callLogs = await _callLogService.getCallLogs();
+      final callLogs = await _callLogService.getCallLogs(limit: 4);
 
       _allCallLogs = callLogs;
       _isLoading = false;
@@ -60,10 +67,12 @@ class CallLogProvider with ChangeNotifier {
     }
   }
 
-  /// Yêu cầu quyền
+  /// Yêu cầu quyền (khi người dùng chủ động bấm nút)
   Future<bool> requestPermission() async {
     try {
-      final granted = await _callLogService.requestPermission();
+      final granted = await _callLogService.requestPermission(
+        openSettingsIfPermanentlyDenied: true,
+      );
       _hasPermission = granted;
       notifyListeners();
       return granted;

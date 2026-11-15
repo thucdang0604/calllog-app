@@ -95,10 +95,17 @@ class _FakeGpsWidgetState extends State<FakeGpsWidget> with WidgetsBindingObserv
   /// Lấy vị trí GPS thực tế hiện tại của thiết bị
   Future<void> _fetchCurrentDeviceLocation({bool silent = false}) async {
     if (_isFetchingLocation) return;
+    if (silent) {
+      final status = await Permission.location.status;
+      if (!status.isGranted) return;
+    }
+    if (!mounted) return;
     setState(() => _isFetchingLocation = true);
 
     try {
-      await Permission.location.request();
+      if (!silent) {
+        await Permission.location.request();
+      }
       final loc = await FakeGpsService.getCurrentDeviceLocation();
 
       if (loc != null && mounted) {

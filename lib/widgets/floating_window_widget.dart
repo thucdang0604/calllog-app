@@ -22,35 +22,36 @@ class _FloatingWindowWidgetState extends State<FloatingWindowWidget>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _checkInitialFloatingWindowState();
-    _loadDisplayCallCount();
-    _loadFloatingOpacity();
-    _checkBatteryOptimization();
+    _loadInitialState();
+  }
+
+  Future<void> _loadInitialState() async {
+    try {
+      final results = await Future.wait<dynamic>([
+        FloatingWindowService.isFloatingWindowVisible(),
+        FloatingWindowService.getDisplayCallCount(),
+        FloatingWindowService.getFloatingOpacity(),
+        PermissionService().isIgnoringBatteryOptimizations(),
+      ]);
+      if (!mounted) return;
+      final isVisible = results[0] as bool;
+      final callCount = results[1] as int;
+      final opacity = results[2] as Map<String, int>;
+      final ignoringBattery = results[3] as bool;
+      setState(() {
+        _isFloatingWindowVisible = isVisible;
+        _displayCallCount = callCount;
+        _bubbleOpacity = opacity['bubbleOpacity'] ?? 80;
+        _panelOpacity = opacity['panelOpacity'] ?? 95;
+        _isIgnoringBattery = ignoringBattery;
+      });
+    } catch (_) {}
   }
 
   Future<void> _checkBatteryOptimization() async {
     final ignoring = await PermissionService().isIgnoringBatteryOptimizations();
-    if (mounted) {
+    if (mounted && ignoring != _isIgnoringBattery) {
       setState(() => _isIgnoringBattery = ignoring);
-    }
-  }
-
-  Future<void> _loadDisplayCallCount() async {
-    final count = await FloatingWindowService.getDisplayCallCount();
-    if (mounted) {
-      setState(() {
-        _displayCallCount = count;
-      });
-    }
-  }
-
-  Future<void> _loadFloatingOpacity() async {
-    final opacity = await FloatingWindowService.getFloatingOpacity();
-    if (mounted) {
-      setState(() {
-        _bubbleOpacity = opacity['bubbleOpacity'] ?? 80;
-        _panelOpacity = opacity['panelOpacity'] ?? 95;
-      });
     }
   }
 
@@ -92,21 +93,6 @@ class _FloatingWindowWidgetState extends State<FloatingWindowWidget>
     if (state == AppLifecycleState.resumed) {
       _syncFloatingWindowState();
       _checkBatteryOptimization();
-    }
-  }
-
-  /// Kiểm tra trạng thái floating window ban đầu
-  Future<void> _checkInitialFloatingWindowState() async {
-    try {
-      await Future.delayed(const Duration(milliseconds: 100));
-      final isVisible = await FloatingWindowService.isFloatingWindowVisible();
-      if (isVisible != _isFloatingWindowVisible && mounted) {
-        setState(() {
-          _isFloatingWindowVisible = isVisible;
-        });
-      }
-    } catch (e) {
-      // Ignore
     }
   }
 

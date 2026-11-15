@@ -48,14 +48,18 @@ class CallLogService {
     return cleanNumber;
   }
 
-  /// Kiểm tra quyền truy cập
+  /// Kiểm tra quyền truy cập (không bật dialog)
   Future<bool> hasPermission() async {
-    return await PermissionService().requestCallLogPermission();
+    return await PermissionService().hasCallLogPermission();
   }
 
   /// Yêu cầu quyền
-  Future<bool> requestPermission() async {
-    return await PermissionService().requestCallLogPermission();
+  Future<bool> requestPermission({
+    bool openSettingsIfPermanentlyDenied = false,
+  }) async {
+    return await PermissionService().requestCallLogPermission(
+      openSettingsIfPermanentlyDenied: openSettingsIfPermanentlyDenied,
+    );
   }
 
   /// Clear cache để force refresh
@@ -66,11 +70,6 @@ class CallLogService {
 
   /// Lấy dữ liệu từ native system
   Future<List<CallLogEntry>> _getSystemCallLogs({int limit = 10}) async {
-    final hasPermission = await PermissionService().requestCallLogPermission();
-    if (!hasPermission) {
-      throw StateError('Không có quyền đọc call log');
-    }
-
     final logs = await NativeCallLogService.getCallLogs(limit: limit);
     return logs.map((log) {
       if (log.formattedNumber == null || log.formattedNumber!.isEmpty) {
