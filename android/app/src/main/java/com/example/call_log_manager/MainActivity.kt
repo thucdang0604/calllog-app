@@ -130,15 +130,6 @@ class MainActivity: FlutterActivity() {
     }
 
     private fun dispatchTimeMarkRequest(intent: Intent?) {
-        val sourcePath = intent?.getStringExtra("process_timemark_source")
-        if (!sourcePath.isNullOrBlank()) {
-            getSharedPreferences("timemark_capture", MODE_PRIVATE)
-                .edit()
-                .putString("pending_source_path", sourcePath)
-                .apply()
-            eventChannel.invokeMethod("processTimeMarkSource", null)
-            return
-        }
         if (intent?.getBooleanExtra("capture_timemark", false) != true) return
         getSharedPreferences("timemark_capture", MODE_PRIVATE)
             .edit()

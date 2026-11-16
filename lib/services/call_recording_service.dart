@@ -6,6 +6,98 @@ import 'package:flutter/services.dart';
 import '../models/call_log_entry.dart';
 import '../models/call_recording_item.dart';
 
+class SystemCallRecSyncStatus {
+  final bool hasTreePermission;
+  final bool hasMediaPermission;
+  final bool isReady;
+  final String folderLabel;
+  final int lastSyncMs;
+  final int lastImportedCount;
+  final String lastError;
+  final String suggestedFolder;
+
+  const SystemCallRecSyncStatus({
+    this.hasTreePermission = false,
+    this.hasMediaPermission = false,
+    this.isReady = false,
+    this.folderLabel = '',
+    this.lastSyncMs = 0,
+    this.lastImportedCount = 0,
+    this.lastError = '',
+    this.suggestedFolder = 'MIUI/sound_recorder/call_rec',
+  });
+
+  factory SystemCallRecSyncStatus.fromMap(Map<dynamic, dynamic>? map) {
+    if (map == null) return const SystemCallRecSyncStatus();
+    return SystemCallRecSyncStatus(
+      hasTreePermission: map['hasTreePermission'] == true,
+      hasMediaPermission: map['hasMediaPermission'] == true,
+      isReady: map['isReady'] == true,
+      folderLabel: (map['folderLabel'] ?? '').toString(),
+      lastSyncMs: _toInt(map['lastSyncMs']),
+      lastImportedCount: _toInt(map['lastImportedCount']),
+      lastError: (map['lastError'] ?? '').toString(),
+      suggestedFolder:
+          (map['suggestedFolder'] ?? 'MIUI/sound_recorder/call_rec').toString(),
+    );
+  }
+
+  static int _toInt(dynamic v) =>
+      v is int ? v : (v is num ? v.toInt() : int.tryParse('$v') ?? 0);
+}
+
+class CallRecordingDiagnostic {
+  final int timestampMs;
+  final String audioSource;
+  final String attemptedSources;
+  final bool silencedBySystem;
+  final int peakAmplitude;
+  final int audioMode;
+  final bool speakerOn;
+  final String reason;
+  final String status;
+  final String brand;
+  final String model;
+  final int sdkInt;
+
+  const CallRecordingDiagnostic({
+    this.timestampMs = 0,
+    this.audioSource = '',
+    this.attemptedSources = '',
+    this.silencedBySystem = false,
+    this.peakAmplitude = -1,
+    this.audioMode = 0,
+    this.speakerOn = false,
+    this.reason = '',
+    this.status = '',
+    this.brand = '',
+    this.model = '',
+    this.sdkInt = 0,
+  });
+
+  factory CallRecordingDiagnostic.fromMap(Map<dynamic, dynamic>? map) {
+    if (map == null) return const CallRecordingDiagnostic();
+    int toInt(dynamic v, [int fb = 0]) =>
+        v is int ? v : (v is num ? v.toInt() : int.tryParse('$v') ?? fb);
+    return CallRecordingDiagnostic(
+      timestampMs: toInt(map['timestampMs']),
+      audioSource: (map['audioSource'] ?? '').toString(),
+      attemptedSources: (map['attemptedSources'] ?? '').toString(),
+      silencedBySystem: map['silencedBySystem'] == true,
+      peakAmplitude: toInt(map['peakAmplitude'], -1),
+      audioMode: toInt(map['audioMode']),
+      speakerOn: map['speakerOn'] == true,
+      reason: (map['reason'] ?? '').toString(),
+      status: (map['status'] ?? '').toString(),
+      brand: (map['brand'] ?? '').toString(),
+      model: (map['model'] ?? '').toString(),
+      sdkInt: toInt(map['sdkInt']),
+    );
+  }
+
+  bool get hasAttempt => timestampMs > 0 && (audioSource.isNotEmpty || status.isNotEmpty);
+}
+
 class CallRecordingEvent {
   final String type;
   final CallPlaybackState? playbackState;
@@ -234,6 +326,91 @@ class CallRecordingService {
       return CallPlaybackState.fromMap(map);
     } catch (_) {
       return const CallPlaybackState.idle();
+    }
+  }
+
+  static Future<CallRecordingDiagnostic> getDiagnostic() async {
+    try {
+      final map = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+        'getCallRecordingDiagnostic',
+      );
+      return CallRecordingDiagnostic.fromMap(map);
+    } catch (_) {
+      return const CallRecordingDiagnostic();
+    }
+  }
+
+  static Future<SystemCallRecSyncStatus> getSystemSyncStatus() async {
+    try {
+      final map = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+        'getSystemCallRecSyncStatus',
+      );
+      return SystemCallRecSyncStatus.fromMap(map);
+    } catch (_) {
+      return const SystemCallRecSyncStatus();
+    }
+  }
+
+  static Future<({int importedCount, int scannedCount, SystemCallRecSyncStatus status})?>
+      pickSystemCallRecFolder() async {
+    try {
+      final map = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+        'pickSystemCallRecFolder',
+      );
+      if (map == null) return null;
+      return (
+        importedCount: SystemCallRecSyncStatus._toInt(map['importedCount']),
+        scannedCount: SystemCallRecSyncStatus._toInt(map['scannedCount']),
+        status: SystemCallRecSyncStatus.fromMap(
+          map['status'] as Map<dynamic, dynamic>?,
+        ),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<bool> requestSystemMediaPermission() async {
+    try {
+      final granted = await _channel.invokeMethod<bool>(
+        'requestSystemCallRecMediaPermission',
+      );
+      return granted ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<({int importedCount, int scannedCount, SystemCallRecSyncStatus status})>
+      syncSystemRecordings() async {
+    try {
+      final map = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+        'syncSystemCallRecordings',
+      );
+      return (
+        importedCount: SystemCallRecSyncStatus._toInt(map?['importedCount']),
+        scannedCount: SystemCallRecSyncStatus._toInt(map?['scannedCount']),
+        status: SystemCallRecSyncStatus.fromMap(
+          map?['status'] as Map<dynamic, dynamic>?,
+        ),
+      );
+    } catch (_) {
+      return (
+        importedCount: 0,
+        scannedCount: 0,
+        status: const SystemCallRecSyncStatus(),
+      );
+    }
+  }
+
+  static Future<SystemCallRecSyncStatus> clearSystemCallRecFolder() async {
+    try {
+      final map = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+        'clearSystemCallRecFolder',
+      );
+      return SystemCallRecSyncStatus.fromMap(map);
+    } catch (_) {
+      return const SystemCallRecSyncStatus();
     }
   }
 

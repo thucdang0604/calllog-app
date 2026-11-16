@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../widgets/tab_guide_banner.dart';
 import 'payment_account_settings_screen.dart';
 
 String _formatPaymentTime(int timestamp) {
@@ -33,7 +34,9 @@ String _zaloStatusLabel(String status) {
 }
 
 class PaymentReconciliationScreen extends StatefulWidget {
-  const PaymentReconciliationScreen({super.key});
+  const PaymentReconciliationScreen({super.key, this.embedded = false});
+
+  final bool embedded;
 
   @override
   State<PaymentReconciliationScreen> createState() =>
@@ -423,6 +426,100 @@ class _PaymentReconciliationScreenState
     return _formatPaymentTime(timestamp);
   }
 
+  Widget _buildGuideBanner() {
+    return const TabGuideBanner(
+      title: 'Hướng dẫn cài đặt & đối soát chuyển khoản',
+      accentColor: Colors.teal,
+      margin: EdgeInsets.fromLTRB(16, 4, 16, 6),
+      maxExpandedHeight: 185,
+      sections: [
+        TabGuideSection(
+          heading: '1. Cài đặt để đơn tự vào Đối soát',
+          steps: [
+            'Mở tab Nhắn tin QR để lưu mẫu SMS chuyển khoản, cấu hình Tài khoản QR tĩnh Zalo và bật Quyền gửi/nhận SMS.',
+            'Khi bật Quyền nhận SMS, tin nhắn khách phản hồi từ số đang có đơn chờ sẽ tự đánh dấu "Khách đã phản hồi" và nổi bật thẻ đơn.',
+            'Mỗi lần bấm SMS hoặc Z (Zalo) từ Bong bóng trôi nổi kèm số tiền, đơn sẽ tự ghi vào mục Chờ chuyển.',
+          ],
+        ),
+        TabGuideSection(
+          heading: '2. Quy trình 3 bước khớp tiền & chốt đơn',
+          steps: [
+            'Chờ chuyển: Lọc theo SMS / Zalo hoặc tìm bằng SĐT, 4 số cuối, mã đơn, số tiền. Khi ngân hàng báo có tiền về, tích ô vuông bên phải để chuyển sang Đã nhận.',
+            'Đã nhận: Bấm biểu tượng Tải xuống trên đơn có ảnh để lưu POD về máy rồi tự động sang Đã xong, hoặc bấm dấu tích tròn xanh để hoàn tất ngay.',
+            'Đã xong: Lưu để đối chiếu cuối ca và tự ẩn khỏi popup nút "₫" trên bong bóng nổi cho gọn; có thể hoàn tác hoặc Xóa sạch.',
+          ],
+        ),
+        TabGuideSection(
+          heading: '3. Mẹo thao tác & Sao lưu',
+          steps: [
+            'Chạm Mã đơn để sao chép nhanh; chạm "4 số cuối · mở SMS / Zalo" để mở thẳng đoạn chat với khách; chạm thẻ để xem/chụp bổ sung ảnh POD.',
+            'Bấm menu ba chấm (⋮) phía trên để Xuất bản sao đối soát (kèm ảnh POD) hoặc Khôi phục khi đổi thiết bị.',
+          ],
+        ),
+      ],
+      highlightNote:
+          'Ứng dụng không tự đánh dấu "Đã nhận tiền" — bạn chủ động kiểm tra biến động số dư rồi mới tick xác nhận để tránh nhầm đơn.',
+    );
+  }
+
+  List<Widget> _buildActionControls(BuildContext context) {
+    return [
+      PopupMenuButton<String>(
+        enabled: !_backupBusy,
+        tooltip: 'Tùy chọn mở rộng',
+        icon: const Icon(Icons.more_vert),
+        onSelected: (action) {
+          if (action == 'export') {
+            _handleBackup(false);
+          } else if (action == 'import') {
+            _handleBackup(true);
+          }
+        },
+        itemBuilder: (_) => const [
+          PopupMenuItem(value: 'export', child: Text('Xuất bản sao đối soát')),
+          PopupMenuItem(value: 'import', child: Text('Khôi phục từ bản sao')),
+        ],
+      ),
+      IconButton(
+        onPressed: () => Navigator.of(context).push<bool>(
+          MaterialPageRoute<bool>(
+            builder: (_) => const PaymentAccountSettingsScreen(),
+          ),
+        ),
+        tooltip: 'Cấu hình tài khoản QR Zalo',
+        icon: const Icon(Icons.account_balance_outlined),
+      ),
+      IconButton(
+        onPressed: _loadRecords,
+        tooltip: 'Làm mới',
+        icon: const Icon(Icons.refresh),
+      ),
+    ];
+  }
+
+  Widget _buildEmbeddedToolbar(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 6, 4, 2),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.receipt_long_outlined, size: 18, color: Colors.blue[700]),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Text(
+              'Đối soát chuyển khoản',
+              style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.bold),
+            ),
+          ),
+          ..._buildActionControls(context),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final pendingRecords = _pending;
@@ -441,70 +538,35 @@ class _PaymentReconciliationScreenState
       (total, record) => total + record.amountValue,
     );
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Đối soát chuyển khoản'),
-        actions: [
-          PopupMenuButton<String>(
-            enabled: !_backupBusy,
-            tooltip: 'Tùy chọn mở rộng',
-            icon: const Icon(Icons.more_vert),
-            onSelected: (action) {
-              if (action == 'export') {
-                _handleBackup(false);
-              } else if (action == 'import') {
-                _handleBackup(true);
-              }
-            },
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'export', child: Text('Xuất bản sao đối soát')),
-              PopupMenuItem(value: 'import', child: Text('Khôi phục từ bản sao')),
-            ],
-          ),
-          IconButton(
-            onPressed: () => Navigator.of(context).push<bool>(
-              MaterialPageRoute<bool>(
-                builder: (_) => const PaymentAccountSettingsScreen(),
+    final mainBody = _isLoading
+        ? const Center(child: CircularProgressIndicator())
+        : _error != null
+        ? Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(_error!, textAlign: TextAlign.center),
+                  const SizedBox(height: 12),
+                  ElevatedButton(
+                    onPressed: _loadRecords,
+                    child: const Text('Thử lại'),
+                  ),
+                ],
               ),
             ),
-            tooltip: 'Cấu hình tài khoản QR Zalo',
-            icon: const Icon(Icons.account_balance_outlined),
-          ),
-          IconButton(
-            onPressed: _loadRecords,
-            tooltip: 'Làm mới',
-            icon: const Icon(Icons.refresh),
-          ),
-        ],
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null
-          ? Center(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
+          )
+        : Column(
+            children: [
+              _buildGuideBanner(),
+              // Top control bar: Summary + Search + Filters
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(_error!, textAlign: TextAlign.center),
-                    const SizedBox(height: 12),
-                    ElevatedButton(
-                      onPressed: _loadRecords,
-                      child: const Text('Thử lại'),
-                    ),
-                  ],
-                ),
-              ),
-            )
-          : Column(
-              children: [
-                // Top control bar: Summary + Search + Filters
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _buildSummaryCard(pendingTotal, receivedTotal, doneTotal),
+                    _buildSummaryCard(pendingTotal, receivedTotal, doneTotal),
                       const SizedBox(height: 8),
                       TextField(
                         controller: _searchController,
@@ -584,70 +646,11 @@ class _PaymentReconciliationScreenState
                     unselectedLabelColor: Colors.grey.shade600,
                     indicatorColor: Theme.of(context).colorScheme.primary,
                     indicatorWeight: 3,
+                    labelPadding: const EdgeInsets.symmetric(horizontal: 4),
                     tabs: [
-                      Tab(
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Text(
-                              'Chờ chuyển',
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            if (pendingRecords.isNotEmpty) ...[
-                              const SizedBox(width: 4),
-                              _buildBadge(
-                                pendingRecords.length,
-                                Colors.orange.shade800,
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                      Tab(
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Text(
-                              'Đã nhận',
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            if (receivedRecords.isNotEmpty) ...[
-                              const SizedBox(width: 4),
-                              _buildBadge(
-                                receivedRecords.length,
-                                Colors.blue.shade700,
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                      Tab(
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Text(
-                              'Đã xong',
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            if (doneRecords.isNotEmpty) ...[
-                              const SizedBox(width: 4),
-                              _buildBadge(
-                                doneRecords.length,
-                                Colors.green.shade700,
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
+                      _buildStatusTab('Chờ chuyển', pendingRecords.length, Colors.orange.shade800),
+                      _buildStatusTab('Đã nhận', receivedRecords.length, Colors.blue.shade700),
+                      _buildStatusTab('Đã xong', doneRecords.length, Colors.green.shade700),
                     ],
                   ),
                 ),
@@ -663,7 +666,49 @@ class _PaymentReconciliationScreenState
                   ),
                 ),
               ],
+            );
+
+    if (widget.embedded) {
+      return Column(
+        children: [
+          _buildEmbeddedToolbar(context),
+          Expanded(child: mainBody),
+        ],
+      );
+    }
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Đối soát chuyển khoản'),
+        actions: _buildActionControls(context),
+      ),
+      body: mainBody,
+    );
+  }
+
+  Widget _buildStatusTab(String label, int count, Color badgeColor) {
+    return Tab(
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              maxLines: 1,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
             ),
+            if (count > 0) ...[
+              const SizedBox(width: 4),
+              _buildBadge(count, badgeColor),
+            ],
+          ],
+        ),
+      ),
     );
   }
 
@@ -773,34 +818,39 @@ class _PaymentReconciliationScreenState
         padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
         child: Column(
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.grey.shade700,
-                  ),
-                ),
-                const SizedBox(width: 3),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0.5),
-                  decoration: BoxDecoration(
-                    color: color,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    '$count',
-                    style: const TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    label,
+                    maxLines: 1,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey.shade700,
                     ),
                   ),
-                ),
-              ],
+                  const SizedBox(width: 3),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0.5),
+                    decoration: BoxDecoration(
+                      color: color,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      '$count',
+                      style: const TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
             const SizedBox(height: 2),
             Text(

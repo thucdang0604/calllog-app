@@ -14,8 +14,6 @@ class _FloatingWindowWidgetState extends State<FloatingWindowWidget>
     with WidgetsBindingObserver {
   bool _isFloatingWindowVisible = false;
   int _displayCallCount = 4;
-  int _bubbleOpacity = 80;
-  int _panelOpacity = 95;
   bool _isIgnoringBattery = true;
 
   @override
@@ -30,19 +28,15 @@ class _FloatingWindowWidgetState extends State<FloatingWindowWidget>
       final results = await Future.wait<dynamic>([
         FloatingWindowService.isFloatingWindowVisible(),
         FloatingWindowService.getDisplayCallCount(),
-        FloatingWindowService.getFloatingOpacity(),
         PermissionService().isIgnoringBatteryOptimizations(),
       ]);
       if (!mounted) return;
       final isVisible = results[0] as bool;
       final callCount = results[1] as int;
-      final opacity = results[2] as Map<String, int>;
-      final ignoringBattery = results[3] as bool;
+      final ignoringBattery = results[2] as bool;
       setState(() {
         _isFloatingWindowVisible = isVisible;
         _displayCallCount = callCount;
-        _bubbleOpacity = opacity['bubbleOpacity'] ?? 80;
-        _panelOpacity = opacity['panelOpacity'] ?? 95;
         _isIgnoringBattery = ignoringBattery;
       });
     } catch (_) {}
@@ -53,16 +47,6 @@ class _FloatingWindowWidgetState extends State<FloatingWindowWidget>
     if (mounted && ignoring != _isIgnoringBattery) {
       setState(() => _isIgnoringBattery = ignoring);
     }
-  }
-
-  Future<void> _updateBubbleOpacity(int value) async {
-    setState(() => _bubbleOpacity = value);
-    await FloatingWindowService.setFloatingOpacity(bubbleOpacity: value);
-  }
-
-  Future<void> _updatePanelOpacity(int value) async {
-    setState(() => _panelOpacity = value);
-    await FloatingWindowService.setFloatingOpacity(panelOpacity: value);
   }
 
   Future<void> _updateDisplayCallCount(int count) async {
@@ -317,9 +301,11 @@ class _FloatingWindowWidgetState extends State<FloatingWindowWidget>
                   color: Colors.blueGrey,
                 ),
                 const SizedBox(width: 8),
-                const Text(
-                  'Số cuộc gọi tối đa ở chế độ mở rộng:',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                const Expanded(
+                  child: Text(
+                    'Số cuộc gọi tối đa ở chế độ mở rộng:',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
                 ),
               ],
             ),
@@ -353,182 +339,12 @@ class _FloatingWindowWidgetState extends State<FloatingWindowWidget>
             ),
             const SizedBox(height: 4),
             Text(
-              'Màn hình thấp luôn chỉ hiện 2 cuộc gọi; mở rộng trên màn hình đủ cao để xem tối đa $_displayCallCount cuộc gọi.',
+              'Màn hình thấp luôn chỉ hiện 2 cuộc gọi; mở rộng trên màn hình đủ cao để xem tối đa $_displayCallCount cuộc gọi. Độ mờ bong bóng & popup chỉnh ở tab Cài đặt.',
               style: TextStyle(
                 fontSize: 12,
                 color: Colors.blue[900],
                 fontStyle: FontStyle.italic,
               ),
-            ),
-
-            const SizedBox(height: 16),
-            const Divider(),
-            const SizedBox(height: 8),
-
-            // Cấu hình độ mờ (Opacity)
-            const Row(
-              children: [
-                Icon(Icons.opacity, size: 20, color: Colors.blueGrey),
-                SizedBox(width: 8),
-                Text(
-                  'Độ mờ / Độ trong suốt (Opacity):',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-
-            // 1. Bong bóng trồi nổi slider
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Row(
-                      children: [
-                        Opacity(
-                          opacity: _bubbleOpacity / 100.0,
-                          child: Container(
-                            width: 24,
-                            height: 24,
-                            decoration: const BoxDecoration(
-                              color: Colors.blue,
-                              shape: BoxShape.circle,
-                            ),
-                            alignment: Alignment.center,
-                            child: const Text(
-                              'LOG',
-                              style: TextStyle(
-                                fontSize: 8,
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        const Text(
-                          'Bong bóng trồi nổi',
-                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
-                        ),
-                      ],
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: Colors.blue.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        '$_bubbleOpacity%',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.blue,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                Slider(
-                  value: _bubbleOpacity.toDouble(),
-                  min: 20,
-                  max: 100,
-                  divisions: 16,
-                  label: '$_bubbleOpacity%',
-                  activeColor: Colors.blue[700],
-                  onChanged: (val) {
-                    final intVal = val.round();
-                    if (intVal != _bubbleOpacity) {
-                      _updateBubbleOpacity(intVal);
-                    }
-                  },
-                ),
-                Padding(
-                  padding: const EdgeInsets.only(left: 4, bottom: 8),
-                  child: Text(
-                    'Mẹo: Chỉnh 60% - 80% để icon mờ nhẹ, không che khuất bản đồ và app giao hàng.',
-                    style: TextStyle(fontSize: 11, color: Colors.grey[600]),
-                  ),
-                ),
-              ],
-            ),
-
-            const SizedBox(height: 8),
-
-            // 2. Popup thao tác nhanh slider
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Row(
-                      children: [
-                        Opacity(
-                          opacity: _panelOpacity / 100.0,
-                          child: Container(
-                            width: 24,
-                            height: 18,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF2C3E50),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            alignment: Alignment.center,
-                            child: const Icon(
-                              Icons.view_agenda,
-                              size: 12,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        const Text(
-                          'Popup thao tác nhanh',
-                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
-                        ),
-                      ],
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: Colors.blue.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        '$_panelOpacity%',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.blue,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                Slider(
-                  value: _panelOpacity.toDouble(),
-                  min: 50,
-                  max: 100,
-                  divisions: 10,
-                  label: '$_panelOpacity%',
-                  activeColor: Colors.blue[700],
-                  onChanged: (val) {
-                    final intVal = val.round();
-                    if (intVal != _panelOpacity) {
-                      _updatePanelOpacity(intVal);
-                    }
-                  },
-                ),
-                Padding(
-                  padding: const EdgeInsets.only(left: 4),
-                  child: Text(
-                    'Mẹo: Chỉnh 80% - 95% để vừa nhìn xuyên ứng dụng bên dưới vừa đọc rõ số điện thoại.',
-                    style: TextStyle(fontSize: 11, color: Colors.grey[600]),
-                  ),
-                ),
-              ],
             ),
           ],
         ),

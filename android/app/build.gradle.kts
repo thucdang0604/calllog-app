@@ -40,6 +40,11 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         buildConfigField("String", "LICENSE_API_BASE_URL", "\"$licenseApiBaseUrl\"")
+
+        // Chỉ giữ 2 kiến trúc ARM dùng trên thiết bị Android thật (bỏ x86/x86_64 máy ảo PC)
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     buildFeatures {
@@ -59,6 +64,12 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("releaseCompatible")
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 }
@@ -80,4 +91,3 @@ dependencies {
     implementation("androidx.camera:camera-view:$cameraxVersion")
     implementation("androidx.appcompat:appcompat:1.6.1")
 }
-

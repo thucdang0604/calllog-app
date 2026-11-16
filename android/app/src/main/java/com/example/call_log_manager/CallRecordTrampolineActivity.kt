@@ -18,6 +18,10 @@ class CallRecordTrampolineActivity : Activity() {
     private var finishedScheduled = false
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    private val focusFallbackRunnable = Runnable {
+        dispatchStartIfNeeded()
+    }
+
     private val safetyTimeoutRunnable = Runnable {
         finishSafely()
     }
@@ -31,8 +35,8 @@ class CallRecordTrampolineActivity : Activity() {
             if (!dispatched || finishedScheduled) return
             if (state.status != CallRecorderCoordinator.RecordingUiStatus.STARTING) {
                 finishedScheduled = true
-                // Giữ Activity thêm 100ms sau khi MediaRecorder.start() / probe ổn định.
-                mainHandler.postDelayed(delayedFinishRunnable, 100L)
+                // Giữ Activity thêm 250ms sau khi MediaRecorder.start() / probe ổn định.
+                mainHandler.postDelayed(delayedFinishRunnable, 250L)
             }
         }
     }
@@ -51,14 +55,33 @@ class CallRecordTrampolineActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        if (dispatched) return
+        if (!dispatched) {
+            if (hasWindowFocus()) {
+                dispatchStartIfNeeded()
+            } else {
+                mainHandler.postDelayed(focusFallbackRunnable, 220L)
+            }
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            dispatchStartIfNeeded()
+        }
+    }
+
+    private fun dispatchStartIfNeeded() {
+        if (dispatched || isFinishing || isDestroyed) return
         dispatched = true
+        mainHandler.removeCallbacks(focusFallbackRunnable)
         CallRecorderCoordinator.addListener(stateListener)
         CallRecorderCoordinator.startManualRecording(applicationContext, fromTrampoline = true)
-        mainHandler.postDelayed(safetyTimeoutRunnable, 1600L)
+        mainHandler.postDelayed(safetyTimeoutRunnable, 2400L)
     }
 
     override fun onDestroy() {
+        mainHandler.removeCallbacks(focusFallbackRunnable)
         mainHandler.removeCallbacks(safetyTimeoutRunnable)
         mainHandler.removeCallbacks(delayedFinishRunnable)
         CallRecorderCoordinator.removeListener(stateListener)

@@ -405,7 +405,7 @@ public final class SmsSendToActivity extends Activity {
 
         SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         CheckBox cbAuto = new CheckBox(this);
-        cbAuto.setText("⚡ Tự động tạo SMS ảo khi mở SMS từ GHN");
+        cbAuto.setText("⚡ Tự động tạo SMS ảo khi mở SMS từ App");
         cbAuto.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         cbAuto.setTextColor(Color.parseColor("#059669"));
         cbAuto.setChecked(prefs.getBoolean(KEY_AUTO_FAKE_INTENT, false));

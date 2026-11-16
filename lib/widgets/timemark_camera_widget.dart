@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../services/timemark_service.dart';
 
@@ -13,21 +12,8 @@ class TimeMarkCameraWidget extends StatefulWidget {
 }
 
 class _TimeMarkCameraWidgetState extends State<TimeMarkCameraWidget> {
-  static const _events = MethodChannel('call_log_manager_events');
   bool _isCapturing = false;
   String? _lastMessage;
-
-  @override
-  void initState() {
-    super.initState();
-    _events.setMethodCallHandler(_handleNativeEvent);
-  }
-
-  Future<void> _handleNativeEvent(MethodCall call) async {
-    if (call.method == 'captureTimeMark') {
-      await _capture();
-    }
-  }
 
   Future<void> _capture() async {
     if (_isCapturing) return;
@@ -46,12 +32,6 @@ class _TimeMarkCameraWidgetState extends State<TimeMarkCameraWidget> {
     } finally {
       if (mounted) setState(() => _isCapturing = false);
     }
-  }
-
-  @override
-  void dispose() {
-    _events.setMethodCallHandler(null);
-    super.dispose();
   }
 
   @override

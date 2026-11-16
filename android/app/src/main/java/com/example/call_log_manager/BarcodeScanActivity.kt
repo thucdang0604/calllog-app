@@ -13,8 +13,8 @@ import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.YuvImage
+import android.media.AudioManager
 import android.media.Image
-import android.media.MediaActionSound
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -131,10 +131,8 @@ class BarcodeScanActivity : AppCompatActivity() {
         BarcodeScanning.getClient(barcodeScannerOptions)
     }
 
-    private val shutterSound: MediaActionSound? by lazy {
-        try {
-            MediaActionSound().also { it.load(MediaActionSound.SHUTTER_CLICK) }
-        } catch (_: Exception) { null }
+    private val soundPlayer: BarcodeScanSoundPlayer by lazy {
+        BarcodeScanSoundPlayer(this)
     }
 
     private val scannedCodesList = ArrayList<JSONObject>()
@@ -146,7 +144,9 @@ class BarcodeScanActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        volumeControlStream = AudioManager.STREAM_MUSIC
         setContentView(R.layout.activity_barcode_scan)
+        soundPlayer.prepareAsync()
 
         existingPendingCodes = intent.getStringArrayListExtra(EXTRA_EXISTING_PENDING_CODES)
             ?.mapNotNull { it?.trim()?.takeIf(String::isNotEmpty) }
@@ -567,21 +567,37 @@ class BarcodeScanActivity : AppCompatActivity() {
             scannedCodesList.add(obj)
         }
 
-        mainHandler.post {
-            playFeedback(isExistingDuplicate = inSharedHistory || inPendingHistory)
+        val outcome = BarcodeScanToneSynthesizer.resolveOutcome(
+            inSharedHistory = inSharedHistory,
+            isDuplicateInSession = isDuplicateInSession,
+            inPendingHistory = inPendingHistory,
+        )
 
-            val (prefix, textColor) = when {
-                inSharedHistory -> "⚠️ Đã ở Đã chia sẻ: " to 0xFFFFB74D.toInt()
-                isDuplicateInSession -> "🔁 Đã quét phiên này: " to 0xFFE0E0E0.toInt()
-                inPendingHistory -> "🔁 Đã có hôm nay: " to 0xFFFFF176.toInt()
-                else -> "✅ Mã mới: " to 0xFFFFFFFF.toInt()
+        mainHandler.post {
+            if (isDestroyed || isFinishing) return@post
+            playFeedback(outcome)
+
+            val showDupWarning = AppSettingsStore.isBarcodeCameraDupWarningEnabled(this)
+            val (prefix, textColor) = if (!showDupWarning) {
+                "✅ Đã quét: " to 0xFFFFFFFF.toInt()
+            } else {
+                when (outcome) {
+                    BarcodeScanOutcome.DUPLICATE_SHARED -> "⚠️ Đã ở Đã chia sẻ: " to 0xFFFFB74D.toInt()
+                    BarcodeScanOutcome.DUPLICATE_SESSION -> "🔁 Đã quét phiên này: " to 0xFFE0E0E0.toInt()
+                    BarcodeScanOutcome.DUPLICATE_PENDING -> "🔁 Đã có hôm nay: " to 0xFFFFF176.toInt()
+                    BarcodeScanOutcome.NEW_CODE -> "✅ Mã mới: " to 0xFFFFFFFF.toInt()
+                }
             }
             tvLastScanned.setTextColor(textColor)
             tvLastScanned.text = "$prefix$rawCode\n($format)"
 
-            val existingDupCount = scannedCodesList.count {
-                val c = it.optString("code")
-                existingSharedCodes.contains(c) || existingPendingCodes.contains(c)
+            val existingDupCount = if (showDupWarning) {
+                scannedCodesList.count {
+                    val c = it.optString("code")
+                    existingSharedCodes.contains(c) || existingPendingCodes.contains(c)
+                }
+            } else {
+                0
             }
             tvCounter.text = if (existingDupCount > 0) {
                 "Đã quét: ${scannedCodesList.size} ($existingDupCount trùng)"
@@ -756,10 +772,12 @@ class BarcodeScanActivity : AppCompatActivity() {
         }
     }
 
-    private fun playFeedback(isExistingDuplicate: Boolean = false) {
-        try {
-            shutterSound?.play(MediaActionSound.SHUTTER_CLICK)
-        } catch (_: Exception) {}
+    private fun playFeedback(outcome: BarcodeScanOutcome) {
+        if (AppSettingsStore.isBarcodeSoundEnabledFor(this, outcome)) {
+            soundPlayer.play(outcome, AppSettingsStore.getBarcodeSoundVolume(this))
+        }
+
+        if (!AppSettingsStore.isBarcodeVibrationEnabled(this)) return
 
         try {
             val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -770,18 +788,31 @@ class BarcodeScanActivity : AppCompatActivity() {
                 getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                if (isExistingDuplicate) {
-                    vibrator?.vibrate(
-                        VibrationEffect.createWaveform(longArrayOf(0L, 45L, 65L, 45L), -1)
+                val effect = when (outcome) {
+                    BarcodeScanOutcome.DUPLICATE_SHARED -> VibrationEffect.createWaveform(
+                        longArrayOf(0L, 65L, 55L, 65L, 55L, 90L),
+                        -1,
                     )
-                } else {
-                    vibrator?.vibrate(
-                        VibrationEffect.createOneShot(45, VibrationEffect.DEFAULT_AMPLITUDE)
+                    BarcodeScanOutcome.DUPLICATE_PENDING -> VibrationEffect.createWaveform(
+                        longArrayOf(0L, 45L, 65L, 45L),
+                        -1,
+                    )
+                    BarcodeScanOutcome.DUPLICATE_SESSION -> VibrationEffect.createOneShot(25, 110)
+                    BarcodeScanOutcome.NEW_CODE -> VibrationEffect.createOneShot(
+                        45,
+                        VibrationEffect.DEFAULT_AMPLITUDE,
                     )
                 }
+                vibrator?.vibrate(effect)
             } else {
+                val durationMs = when (outcome) {
+                    BarcodeScanOutcome.DUPLICATE_SHARED -> 140L
+                    BarcodeScanOutcome.DUPLICATE_PENDING -> 90L
+                    BarcodeScanOutcome.DUPLICATE_SESSION -> 25L
+                    BarcodeScanOutcome.NEW_CODE -> 45L
+                }
                 @Suppress("DEPRECATION")
-                vibrator?.vibrate(if (isExistingDuplicate) 90 else 45)
+                vibrator?.vibrate(durationMs)
             }
         } catch (_: Exception) {}
     }
@@ -845,6 +876,7 @@ class BarcodeScanActivity : AppCompatActivity() {
     override fun onDestroy() {
         isFinishingSession = true
         mainHandler.removeCallbacksAndMessages(null)
+        soundPlayer.release()
         cameraExecutor.shutdown()
         photoExecutor.shutdown()
         barcodeScanner.close()

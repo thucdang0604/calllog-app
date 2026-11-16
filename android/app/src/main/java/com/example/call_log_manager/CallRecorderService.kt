@@ -67,6 +67,7 @@ class CallRecorderService : Service() {
     private var zeroAmplitudeTicks: Int = 0
     private var lastSystemSilenced: Boolean = false
     private var activeCandidates: List<Pair<Int, String>> = emptyList()
+    private val attemptedSourcesLog = ArrayList<String>()
 
     private var pendingStartRunnable: Runnable? = null
     private var initialProbeRunnable: Runnable? = null
@@ -216,14 +217,20 @@ class CallRecorderService : Service() {
     }
 
     private fun getAudioSourceCandidates(): List<Pair<Int, String>> {
+        val unprocessedPair = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            MediaRecorder.AudioSource.UNPROCESSED to "UNPROCESSED"
+        } else {
+            null
+        }
         return when (CallRecordingStore.getAudioSourcePref(this)) {
-            "voice_call" -> listOf(
-                MediaRecorder.AudioSource.VOICE_CALL to "VOICE_CALL",
-                MediaRecorder.AudioSource.MIC to "MIC",
-                MediaRecorder.AudioSource.CAMCORDER to "CAMCORDER",
-                MediaRecorder.AudioSource.VOICE_RECOGNITION to "VOICE_RECOGNITION",
-                MediaRecorder.AudioSource.VOICE_COMMUNICATION to "VOICE_COMMUNICATION"
-            )
+            "voice_call" -> buildList {
+                add(MediaRecorder.AudioSource.VOICE_CALL to "VOICE_CALL")
+                add(MediaRecorder.AudioSource.MIC to "MIC")
+                add(MediaRecorder.AudioSource.CAMCORDER to "CAMCORDER")
+                add(MediaRecorder.AudioSource.VOICE_RECOGNITION to "VOICE_RECOGNITION")
+                add(MediaRecorder.AudioSource.VOICE_COMMUNICATION to "VOICE_COMMUNICATION")
+                unprocessedPair?.let(::add)
+            }
             "camcorder" -> listOf(
                 MediaRecorder.AudioSource.CAMCORDER to "CAMCORDER",
                 MediaRecorder.AudioSource.MIC to "MIC",
@@ -245,14 +252,20 @@ class CallRecorderService : Service() {
                 MediaRecorder.AudioSource.CAMCORDER to "CAMCORDER",
                 MediaRecorder.AudioSource.VOICE_RECOGNITION to "VOICE_RECOGNITION"
             )
-            else -> listOf(
+            "unprocessed" -> buildList {
+                unprocessedPair?.let(::add)
+                add(MediaRecorder.AudioSource.MIC to "MIC")
+                add(MediaRecorder.AudioSource.CAMCORDER to "CAMCORDER")
+            }
+            else -> buildList {
                 // Không dùng Trợ năng: ưu tiên MIC & CAMCORDER trước vì VOICE_RECOGNITION/VOICE_COMMUNICATION
                 // thường bị AudioPolicy hoặc DSP cuộc gọi khử tiếng / câm khi MODE_IN_CALL.
-                MediaRecorder.AudioSource.MIC to "MIC",
-                MediaRecorder.AudioSource.CAMCORDER to "CAMCORDER",
-                MediaRecorder.AudioSource.VOICE_RECOGNITION to "VOICE_RECOGNITION",
-                MediaRecorder.AudioSource.VOICE_COMMUNICATION to "VOICE_COMMUNICATION"
-            )
+                add(MediaRecorder.AudioSource.MIC to "MIC")
+                add(MediaRecorder.AudioSource.CAMCORDER to "CAMCORDER")
+                add(MediaRecorder.AudioSource.VOICE_RECOGNITION to "VOICE_RECOGNITION")
+                add(MediaRecorder.AudioSource.VOICE_COMMUNICATION to "VOICE_COMMUNICATION")
+                unprocessedPair?.let(::add)
+            }
         }
     }
 
@@ -262,12 +275,14 @@ class CallRecorderService : Service() {
         val candidates = if (candidateStartIndex > 0 && activeCandidates.isNotEmpty()) {
             activeCandidates
         } else {
+            attemptedSourcesLog.clear()
             getAudioSourceCandidates().also { activeCandidates = it }
         }
         val now = System.currentTimeMillis()
 
         for (idx in candidateStartIndex until candidates.size) {
             val (sourceInt, sourceName) = candidates[idx]
+            attemptedSourcesLog.add(sourceName)
             val targetFile = CallRecordingStore.createTempRawFile(this, now + idx)
             var recorder: MediaRecorder? = null
             try {
@@ -355,12 +370,16 @@ class CallRecorderService : Service() {
             val hasSignalNow = peakAmplitudeSeen > 0 && !sysSilenced
             CallRecorderCoordinator.notifyRecordingStarted(startedAtMs, usedAudioSourceName, hasSignalNow)
             if (sysSilenced) {
+                val reason = buildSystemSilenceReason()
+                saveDiagnosticSnapshot(silenced = true, status = "SILENCED", reason = reason)
                 CallRecorderCoordinator.notifyRecordingSignalUpdate(
                     hasSignal = false,
                     isSilenced = true,
                     audioSource = usedAudioSourceName,
-                    reason = "Hệ thống chặn mic khi đang gọi"
+                    reason = reason
                 )
+            } else {
+                saveDiagnosticSnapshot(silenced = false, status = "RECORDING", reason = "")
             }
             scheduleSignalMonitor()
         }
@@ -393,15 +412,53 @@ class CallRecorderService : Service() {
         mainHandler.postDelayed(runnable, SIGNAL_MONITOR_INTERVAL_MS)
     }
 
+    private fun buildSystemSilenceReason(): String {
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        val mode = audioManager?.mode ?: AudioManager.MODE_NORMAL
+        return if (mode == AudioManager.MODE_IN_CALL) {
+            if (SystemCallRecordingSync.isConfigured(this)) {
+                "VoLTE chặn mic · Bấm Thêm→Ghi âm"
+            } else {
+                "VoLTE chặn mic · Dùng Ghi âm máy"
+            }
+        } else {
+            "Hệ thống chặn mic khi đang gọi"
+        }
+    }
+
+    private fun saveDiagnosticSnapshot(silenced: Boolean, status: String, reason: String) {
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        val mode = audioManager?.mode ?: AudioManager.MODE_NORMAL
+        @Suppress("DEPRECATION")
+        val speakerOn = try { audioManager?.isSpeakerphoneOn == true } catch (_: Exception) { false }
+        CallRecordingStore.saveLastDiagnostic(
+            this,
+            mapOf(
+                "timestampMs" to System.currentTimeMillis(),
+                "audioSource" to usedAudioSourceName,
+                "attemptedSources" to attemptedSourcesLog.distinct().joinToString(" -> "),
+                "silencedBySystem" to silenced,
+                "peakAmplitude" to peakAmplitudeSeen,
+                "audioMode" to mode,
+                "speakerOn" to speakerOn,
+                "reason" to reason,
+                "status" to status
+            )
+        )
+    }
+
     private fun evaluateAndPushSignalState() {
         if (!isRecordingActive || !initialProbeSettled) return
         val hasSignalNow = peakAmplitudeSeen > 0 && !lastSystemSilenced
         val zeroTooLong = peakAmplitudeSeen <= 0 && zeroAmplitudeTicks >= SILENT_TICKS_THRESHOLD
         val showSilenced = lastSystemSilenced || zeroTooLong
         val reason = when {
-            lastSystemSilenced -> "Hệ thống chặn mic khi đang gọi"
+            lastSystemSilenced -> buildSystemSilenceReason()
             zeroTooLong -> "Không thấy tiếng · thử Loa ngoài"
             else -> null
+        }
+        if (showSilenced && reason != null) {
+            saveDiagnosticSnapshot(silenced = lastSystemSilenced, status = "SILENCED", reason = reason)
         }
         CallRecorderCoordinator.notifyRecordingSignalUpdate(
             hasSignal = hasSignalNow,
@@ -515,6 +572,13 @@ class CallRecorderService : Service() {
         val callType = activeCallType
         val audioSource = usedAudioSourceName
         val recordedPeakAmp = peakAmplitudeSeen
+        val wasSilencedAtStop = lastSystemSilenced
+
+        saveDiagnosticSnapshot(
+            silenced = wasSilencedAtStop || recordedPeakAmp == 0,
+            status = if (wasSilencedAtStop) "SILENCED" else if (recordedPeakAmp > 0) "RECORDED_AUDIO" else "NO_SIGNAL",
+            reason = if (wasSilencedAtStop) buildSystemSilenceReason() else ""
+        )
 
         activeSessionId = 0L
         activeRingStartedAtMs = 0L
@@ -525,6 +589,7 @@ class CallRecorderService : Service() {
         peakAmplitudeSeen = -1
         zeroAmplitudeTicks = 0
         lastSystemSilenced = false
+        attemptedSourcesLog.clear()
 
         if (recorder != null) {
             try {

@@ -12,6 +12,7 @@ class CallRecordingItem {
   final int fileSizeBytes;
   final String audioSource;
   final int peakAmplitude;
+  final String origin;
 
   const CallRecordingItem({
     required this.id,
@@ -27,6 +28,7 @@ class CallRecordingItem {
     required this.fileSizeBytes,
     required this.audioSource,
     this.peakAmplitude = -1,
+    this.origin = 'in_app',
   });
 
   factory CallRecordingItem.fromMap(Map<dynamic, dynamic> map) {
@@ -44,6 +46,7 @@ class CallRecordingItem {
       fileSizeBytes: _asInt(map['fileSizeBytes'], 0),
       audioSource: (map['audioSource'] ?? 'VOICE_RECOGNITION').toString(),
       peakAmplitude: _asInt(map['peakAmplitude'], -1),
+      origin: (map['origin'] ?? 'in_app').toString(),
     );
   }
 
@@ -52,7 +55,8 @@ class CallRecordingItem {
 
   bool get isIncoming => callType == 1;
   bool get isOutgoing => callType == 2;
-  bool get isSilentRecording => peakAmplitude == 0;
+  bool get isSystemDialer => origin == 'system_dialer';
+  bool get isSilentRecording => !isSystemDialer && peakAmplitude == 0;
 
   String get displayTitle {
     final cleanName = contactName.trim();
@@ -146,6 +150,10 @@ class CallRecordingItem {
         return 'Voice Communication (VoIP/Loa thoại)';
       case 'voice_call':
         return 'Voice Call (Thu 2 chiều hệ thống)';
+      case 'unprocessed':
+        return 'Unprocessed (Mic thô không lọc âm)';
+      case 'system_dialer':
+        return 'Ghi âm hệ thống máy (2 chiều VoLTE)';
       case 'auto':
       default:
         return 'Tự động (Thử MIC -> Camcorder -> Voice Recognition)';

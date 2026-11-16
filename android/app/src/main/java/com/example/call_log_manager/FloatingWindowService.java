@@ -2284,13 +2284,20 @@ public class FloatingWindowService extends Service {
                 break;
 
             case SILENCED:
-                bgColor = 0xE6C2410C;
-                strokeColor = 0xFFFDBA74;
-                iconText = "🔇";
-                labelText = "Không có tiếng · " + timerStr;
-                hintText = (state.getErrorMessage() != null && !state.getErrorMessage().isEmpty())
-                    ? state.getErrorMessage()
-                    : "Thử bật Loa ngoài";
+                if (AppSettingsStore.isCallRecordingSilenceWarningEnabled(this)) {
+                    bgColor = 0xE6C2410C;
+                    strokeColor = 0xFFFDBA74;
+                    iconText = "🔇";
+                    labelText = "Không có tiếng · " + timerStr;
+                    hintText = (state.getErrorMessage() != null && !state.getErrorMessage().isEmpty())
+                        ? state.getErrorMessage()
+                        : "Thử bật Loa ngoài";
+                } else {
+                    bgColor = 0xE6DC2626;
+                    strokeColor = 0xFFFCA5A5;
+                    iconText = "⏹";
+                    labelText = "Dừng · " + timerStr;
+                }
                 startCallRecordTimer();
                 break;
 
@@ -2380,6 +2387,7 @@ public class FloatingWindowService extends Service {
     }
 
     private void performHapticFeedback() {
+        if (!AppSettingsStore.isOverlayVibrationEnabled(this)) return;
         try {
             Vibrator vibrator;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -2538,11 +2546,6 @@ public class FloatingWindowService extends Service {
             Log.e(TAG, "Error updating call log by ID", e);
             return false;
         }
-    }
-
-    private void refreshCallLogs() {
-        onNewCallDetected();
-        Toast.makeText(this, "↻ Đã làm mới", Toast.LENGTH_SHORT).show();
     }
 
     private void _saveFloatingWindowState(boolean isShowing) {

@@ -4,7 +4,6 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.role.RoleManager;
 import android.content.ContentResolver;
-import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -17,7 +16,6 @@ import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
 import android.os.Bundle;
-import android.provider.MediaStore;
 import android.provider.CallLog;
 import android.provider.Settings;
 import android.provider.Telephony;
@@ -34,7 +32,6 @@ import java.util.ArrayList;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
-import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.List;
@@ -61,12 +58,16 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
     private static final int EXPORT_PAYMENT_BACKUP_REQUEST_CODE = 1004;
     private static final int IMPORT_PAYMENT_BACKUP_REQUEST_CODE = 1005;
     private static final int CALL_REC_PERMISSION_REQUEST_CODE = 1006;
+    private static final int SYSTEM_CALL_REC_FOLDER_REQUEST_CODE = 1007;
+    private static final int SYSTEM_CALL_REC_MEDIA_PERMISSION_REQUEST_CODE = 1008;
 
     private MethodChannel channel;
     private EventChannel paymentTrackingEvents;
     private EventChannel callRecordingEvents;
     private final android.os.Handler callRecMainHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private Result pendingCallRecPermissionResult;
+    private Result pendingSystemCallRecFolderResult;
+    private Result pendingSystemCallRecMediaPermResult;
     private Context context;
     private Activity activity;
     private ActivityPluginBinding activityBinding;
@@ -78,6 +79,7 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
     private final ExecutorService backgroundExecutor = Executors.newFixedThreadPool(3);
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Object barcodeFileLock = new Object();
+    private BarcodeScanSoundPlayer scanSoundPlayer;
 
     @Override
     public void onAttachedToEngine(FlutterPluginBinding flutterPluginBinding) {
@@ -161,6 +163,14 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
         if (pendingCallRecPermissionResult != null) {
             pendingCallRecPermissionResult.success(false);
             pendingCallRecPermissionResult = null;
+        }
+        if (pendingSystemCallRecFolderResult != null) {
+            pendingSystemCallRecFolderResult.success(null);
+            pendingSystemCallRecFolderResult = null;
+        }
+        if (pendingSystemCallRecMediaPermResult != null) {
+            pendingSystemCallRecMediaPermResult.success(false);
+            pendingSystemCallRecMediaPermResult = null;
         }
         if (pendingIncomingSmsPermissionResult != null) {
             pendingIncomingSmsPermissionResult.success(false);
@@ -317,15 +327,6 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
             case "getCurrentDeviceLocation":
                 getCurrentDeviceLocation(result);
                 break;
-            case "saveTimeMarkImage":
-                saveTimeMarkImage(call, result);
-                break;
-            case "consumeTimeMarkCapture":
-                consumeTimeMarkCapture(result);
-                break;
-            case "consumeTimeMarkSource":
-                consumeTimeMarkSource(result);
-                break;
             case "openQuickCamera":
                 openQuickCamera(result);
                 break;
@@ -405,6 +406,38 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
                 break;
             case "getCallRecordingPlaybackState":
                 getCallRecordingPlaybackState(result);
+                break;
+            case "getCallRecordingDiagnostic":
+                getCallRecordingDiagnostic(result);
+                break;
+            case "getSystemCallRecSyncStatus":
+                getSystemCallRecSyncStatus(result);
+                break;
+            case "pickSystemCallRecFolder":
+                pickSystemCallRecFolder(result);
+                break;
+            case "requestSystemCallRecMediaPermission":
+                requestSystemCallRecMediaPermission(result);
+                break;
+            case "syncSystemCallRecordings":
+                syncSystemCallRecordings(result);
+                break;
+            case "clearSystemCallRecFolder":
+                clearSystemCallRecFolder(result);
+                break;
+            case "getAppSettings":
+                result.success(AppSettingsStore.getAllAsMap(context));
+                break;
+            case "saveAppSettings": {
+                Map<String, Object> settings = call.argument("settings");
+                result.success(AppSettingsStore.saveFromMap(context, settings));
+                break;
+            }
+            case "resetAppSettings":
+                result.success(AppSettingsStore.resetDefaults(context));
+                break;
+            case "previewScanTone":
+                previewScanTone(call, result);
                 break;
 
             default:
@@ -536,77 +569,6 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
         } catch (Exception e) {
             result.error("LOCATION_ERROR", e.getMessage(), null);
         }
-    }
-
-    /**
-     * Copies the completed TimeMark file into the user's Pictures collection.
-     * The file copy is intentionally kept off the platform channel's main thread.
-     */
-    private void saveTimeMarkImage(MethodCall call, Result result) {
-        final String sourcePath = call.argument("sourcePath");
-        if (sourcePath == null || sourcePath.isEmpty()) {
-            result.error("INVALID_ARGUMENT", "sourcePath is required", null);
-            return;
-        }
-
-        backgroundExecutor.execute(() -> {
-            Uri outputUri = null;
-            try {
-                File source = new File(sourcePath);
-                if (!source.isFile()) {
-                    throw new IllegalArgumentException("TimeMark source image does not exist");
-                }
-                ContentValues values = new ContentValues();
-                values.put(MediaStore.Images.Media.DISPLAY_NAME, "TimeMark_" + System.currentTimeMillis() + ".jpg");
-                values.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    values.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/TimeMark");
-                    values.put(MediaStore.Images.Media.IS_PENDING, 1);
-                }
-
-                ContentResolver resolver = context.getContentResolver();
-                outputUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
-                if (outputUri == null) throw new IllegalStateException("Could not create media item");
-                try (FileInputStream input = new FileInputStream(source);
-                     OutputStream output = resolver.openOutputStream(outputUri)) {
-                    if (output == null) throw new IllegalStateException("Could not open media output");
-                    byte[] buffer = new byte[32 * 1024];
-                    int read;
-                    while ((read = input.read(buffer)) != -1) {
-                        output.write(buffer, 0, read);
-                    }
-                }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    ContentValues readyValues = new ContentValues();
-                    readyValues.put(MediaStore.Images.Media.IS_PENDING, 0);
-                    resolver.update(outputUri, readyValues, null, null);
-                }
-                final String uriText = outputUri.toString();
-                mainHandler.post(() -> result.success(uriText));
-            } catch (Exception e) {
-                if (outputUri != null) {
-                    try {
-                        context.getContentResolver().delete(outputUri, null, null);
-                    } catch (Exception ignored) {
-                    }
-                }
-                mainHandler.post(() -> result.error("SAVE_TIMEMARK_ERROR", e.getMessage(), null));
-            }
-        });
-    }
-
-    private void consumeTimeMarkCapture(Result result) {
-        android.content.SharedPreferences prefs = context.getSharedPreferences("timemark_capture", Context.MODE_PRIVATE);
-        boolean pending = prefs.getBoolean("pending", false);
-        if (pending) prefs.edit().putBoolean("pending", false).apply();
-        result.success(pending);
-    }
-
-    private void consumeTimeMarkSource(Result result) {
-        android.content.SharedPreferences prefs = context.getSharedPreferences("timemark_capture", Context.MODE_PRIVATE);
-        String sourcePath = prefs.getString("pending_source_path", null);
-        if (sourcePath != null) prefs.edit().remove("pending_source_path").apply();
-        result.success(sourcePath);
     }
 
     private void openQuickCamera(Result result) {
@@ -829,6 +791,28 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
                     result.success("[]");
                 }
             }
+            return true;
+        }
+        if (requestCode == SYSTEM_CALL_REC_FOLDER_REQUEST_CODE) {
+            Result folderResult = pendingSystemCallRecFolderResult;
+            pendingSystemCallRecFolderResult = null;
+            if (folderResult == null) return true;
+            if (resultCode != Activity.RESULT_OK || data == null || data.getData() == null || context == null) {
+                folderResult.success(null);
+                return true;
+            }
+            Uri treeUri = data.getData();
+            int flags = data.getFlags();
+            backgroundExecutor.execute(() -> {
+                try {
+                    Map<String, Object> summary = SystemCallRecordingSync.INSTANCE.onTreeUriPicked(
+                        context, treeUri, flags
+                    );
+                    callRecMainHandler.post(() -> folderResult.success(summary));
+                } catch (Exception e) {
+                    callRecMainHandler.post(() -> folderResult.error("PICK_FOLDER_FAILED", e.getMessage(), null));
+                }
+            });
             return true;
         }
         if (requestCode != EXPORT_PAYMENT_BACKUP_REQUEST_CODE
@@ -1279,6 +1263,22 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
             if (pendingCallRecPermissionResult != null) {
                 pendingCallRecPermissionResult.success(granted);
                 pendingCallRecPermissionResult = null;
+            }
+            return true;
+        }
+        if (requestCode == SYSTEM_CALL_REC_MEDIA_PERMISSION_REQUEST_CODE) {
+            boolean granted = context != null && SystemCallRecordingSync.INSTANCE.hasMediaAudioPermission(context);
+            Result permResult = pendingSystemCallRecMediaPermResult;
+            pendingSystemCallRecMediaPermResult = null;
+            if (granted && context != null) {
+                backgroundExecutor.execute(() -> {
+                    SystemCallRecordingSync.INSTANCE.syncNow(context, "media_perm");
+                    if (permResult != null) {
+                        callRecMainHandler.post(() -> permResult.success(true));
+                    }
+                });
+            } else if (permResult != null) {
+                permResult.success(false);
             }
             return true;
         }
@@ -1741,7 +1741,7 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
             String authority = context.getPackageName() + ".timemark.fileprovider";
             android.net.Uri uri = androidx.core.content.FileProvider.getUriForFile(context, authority, file);
             android.content.Intent sendIntent = new android.content.Intent(android.content.Intent.ACTION_SEND);
-            sendIntent.setType("audio/mp4");
+            sendIntent.setType(resolveAudioMimeType(file.getName()));
             sendIntent.putExtra(android.content.Intent.EXTRA_STREAM, uri);
             if (title != null && !title.trim().isEmpty()) {
                 sendIntent.putExtra(android.content.Intent.EXTRA_SUBJECT, title);
@@ -1820,12 +1820,146 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
         }
     }
 
+    private void previewScanTone(MethodCall call, Result result) {
+        String outcomeName = call.argument("outcome");
+        BarcodeScanOutcome outcome;
+        try {
+            outcome = outcomeName != null
+                ? BarcodeScanOutcome.valueOf(outcomeName)
+                : BarcodeScanOutcome.NEW_CODE;
+        } catch (IllegalArgumentException ignored) {
+            outcome = BarcodeScanOutcome.NEW_CODE;
+        }
+        Number volumeNum = call.argument("volume");
+        int volume = volumeNum != null
+            ? volumeNum.intValue()
+            : AppSettingsStore.getBarcodeSoundVolume(context);
+
+        if (scanSoundPlayer == null) {
+            scanSoundPlayer = new BarcodeScanSoundPlayer(context);
+            scanSoundPlayer.prepareAsync();
+        }
+        scanSoundPlayer.play(outcome, volume);
+        result.success(true);
+    }
+
     private void getCallRecordingPlaybackState(Result result) {
         try {
             result.success(CallAudioPlayerManager.INSTANCE.getState());
         } catch (Exception e) {
             result.error("STATE_FAILED", e.getMessage(), null);
         }
+    }
+
+    private String resolveAudioMimeType(String fileName) {
+        String lower = fileName != null ? fileName.toLowerCase(java.util.Locale.US) : "";
+        if (lower.endsWith(".mp3")) return "audio/mpeg";
+        if (lower.endsWith(".aac")) return "audio/aac";
+        if (lower.endsWith(".amr")) return "audio/amr";
+        if (lower.endsWith(".wav")) return "audio/wav";
+        if (lower.endsWith(".ogg") || lower.endsWith(".opus")) return "audio/ogg";
+        if (lower.endsWith(".3gp")) return "audio/3gpp";
+        return "audio/mp4";
+    }
+
+    private void getCallRecordingDiagnostic(Result result) {
+        if (context == null) {
+            result.success(new java.util.HashMap<>());
+            return;
+        }
+        java.util.Map<String, Object> out = new java.util.HashMap<>();
+        java.util.Map<String, Object> last = CallRecordingStore.INSTANCE.getLastDiagnostic(context);
+        if (last != null) {
+            out.putAll(last);
+        }
+        out.put("brand", android.os.Build.BRAND != null ? android.os.Build.BRAND : "");
+        out.put("manufacturer", android.os.Build.MANUFACTURER != null ? android.os.Build.MANUFACTURER : "");
+        out.put("model", android.os.Build.MODEL != null ? android.os.Build.MODEL : "");
+        out.put("sdkInt", android.os.Build.VERSION.SDK_INT);
+        android.media.AudioManager am = (android.media.AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+        if (am != null) {
+            out.put("currentAudioMode", am.getMode());
+            out.put("currentSpeakerOn", am.isSpeakerphoneOn());
+        }
+        result.success(out);
+    }
+
+    private void getSystemCallRecSyncStatus(Result result) {
+        if (context == null) {
+            result.success(new java.util.HashMap<>());
+            return;
+        }
+        result.success(SystemCallRecordingSync.INSTANCE.getStatus(context));
+    }
+
+    private void pickSystemCallRecFolder(Result result) {
+        if (activity == null || context == null) {
+            result.error("NO_ACTIVITY", "Cần mở màn hình ứng dụng để chọn thư mục", null);
+            return;
+        }
+        if (pendingSystemCallRecFolderResult != null) {
+            result.error("IN_PROGRESS", "Đang mở bộ chọn thư mục", null);
+            return;
+        }
+        try {
+            Intent intent = SystemCallRecordingSync.INSTANCE.buildPickFolderIntent(context);
+            pendingSystemCallRecFolderResult = result;
+            activity.startActivityForResult(intent, SYSTEM_CALL_REC_FOLDER_REQUEST_CODE);
+        } catch (Exception e) {
+            pendingSystemCallRecFolderResult = null;
+            result.error("PICKER_ERROR", e.getMessage(), null);
+        }
+    }
+
+    private void requestSystemCallRecMediaPermission(Result result) {
+        if (context == null) {
+            result.success(false);
+            return;
+        }
+        if (SystemCallRecordingSync.INSTANCE.hasMediaAudioPermission(context)) {
+            backgroundExecutor.execute(() -> {
+                SystemCallRecordingSync.INSTANCE.syncNow(context, "media_already_granted");
+                callRecMainHandler.post(() -> result.success(true));
+            });
+            return;
+        }
+        if (activity == null) {
+            result.success(false);
+            return;
+        }
+        if (pendingSystemCallRecMediaPermResult != null) {
+            result.error("PERMISSION_IN_PROGRESS", "Permission request already in progress", null);
+            return;
+        }
+        pendingSystemCallRecMediaPermResult = result;
+        androidx.core.app.ActivityCompat.requestPermissions(
+                activity,
+                new String[]{SystemCallRecordingSync.INSTANCE.getRequiredMediaPermission()},
+                SYSTEM_CALL_REC_MEDIA_PERMISSION_REQUEST_CODE
+        );
+    }
+
+    private void syncSystemCallRecordings(Result result) {
+        if (context == null) {
+            result.success(new java.util.HashMap<>());
+            return;
+        }
+        backgroundExecutor.execute(() -> {
+            try {
+                Map<String, Object> summary = SystemCallRecordingSync.INSTANCE.syncNow(context, "manual");
+                callRecMainHandler.post(() -> result.success(summary));
+            } catch (Exception e) {
+                callRecMainHandler.post(() -> result.error("SYNC_FAILED", e.getMessage(), null));
+            }
+        });
+    }
+
+    private void clearSystemCallRecFolder(Result result) {
+        if (context == null) {
+            result.success(new java.util.HashMap<>());
+            return;
+        }
+        result.success(SystemCallRecordingSync.INSTANCE.clearTreeFolder(context));
     }
 
     @Override
@@ -1838,6 +1972,10 @@ public class CallLogManagerPlugin implements FlutterPlugin, MethodCallHandler, A
         try {
             CallAudioPlayerManager.INSTANCE.stop();
         } catch (Exception ignored) {}
+        if (scanSoundPlayer != null) {
+            scanSoundPlayer.release();
+            scanSoundPlayer = null;
+        }
         backgroundExecutor.shutdown();
     }
 }

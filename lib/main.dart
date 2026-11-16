@@ -15,7 +15,7 @@ class CallLogManagerApp extends StatelessWidget {
     return ChangeNotifierProvider(
       create: (context) => CallLogProvider(),
       child: MaterialApp(
-        title: 'APP NVPTTT',
+        title: 'Delivery Support',
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
           primarySwatch: Colors.blue,

@@ -93,11 +93,4 @@ class CallLogProvider with ChangeNotifier {
   Future<void> refresh() async {
     await loadCallLogs(forceRefresh: true);
   }
-
-  /// Xóa lỗi
-  void clearError() {
-    _hasError = false;
-    _errorMessage = '';
-    notifyListeners();
-  }
 }

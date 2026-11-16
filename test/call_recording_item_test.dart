@@ -408,5 +408,64 @@ void main() {
         'r_zero',
       );
     });
+
+    test('system_dialer origin, diagnostic, and sync status models parse cleanly', () {
+      final sysItem = CallRecordingItem.fromMap({
+        'id': 'sys_1',
+        'filePath': '/data/user/0/app/files/call_recordings/sys_1.mp3',
+        'phoneNumber': '0938308279',
+        'normalizedNumber': '0938308279',
+        'callType': 2,
+        'startedAt': 1700000000000,
+        'endedAt': 1700000045000,
+        'durationMs': 45000,
+        'fileSizeBytes': 180000,
+        'audioSource': 'SYSTEM_DIALER',
+        'peakAmplitude': 0,
+        'origin': 'system_dialer',
+      });
+      expect(sysItem.isSystemDialer, isTrue);
+      expect(sysItem.isSilentRecording, isFalse);
+      expect(
+        CallRecordingItem.audioSourceDisplayLabel('system_dialer'),
+        contains('2 chiều VoLTE'),
+      );
+      expect(
+        CallRecordingItem.audioSourceDisplayLabel('unprocessed'),
+        contains('Unprocessed'),
+      );
+
+      final diag = CallRecordingDiagnostic.fromMap({
+        'timestampMs': 1700000000000,
+        'audioSource': 'VOICE_COMMUNICATION',
+        'attemptedSources': 'MIC -> CAMCORDER -> VOICE_RECOGNITION',
+        'silencedBySystem': true,
+        'peakAmplitude': 0,
+        'audioMode': 2,
+        'speakerOn': true,
+        'reason': 'VoLTE chặn mic · Dùng Ghi âm máy',
+        'status': 'SILENCED',
+        'brand': 'Xiaomi',
+        'model': '2312DRA50G',
+        'sdkInt': 34,
+      });
+      expect(diag.hasAttempt, isTrue);
+      expect(diag.silencedBySystem, isTrue);
+      expect(diag.speakerOn, isTrue);
+      expect(diag.brand, 'Xiaomi');
+
+      final sync = SystemCallRecSyncStatus.fromMap({
+        'hasTreePermission': true,
+        'hasMediaPermission': false,
+        'isReady': true,
+        'folderLabel': 'MIUI/sound_recorder/call_rec',
+        'lastSyncMs': 1700000100000,
+        'lastImportedCount': 3,
+        'suggestedFolder': 'MIUI/sound_recorder/call_rec',
+      });
+      expect(sync.isReady, isTrue);
+      expect(sync.hasTreePermission, isTrue);
+      expect(sync.lastImportedCount, 3);
+    });
   });
 }

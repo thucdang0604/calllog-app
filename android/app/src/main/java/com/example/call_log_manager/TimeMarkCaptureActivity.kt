@@ -380,9 +380,13 @@ class TimeMarkCaptureActivity : AppCompatActivity() {
 
     private fun playShutterFeedback() {
         // Tái sử dụng static MediaActionSound thay vì tạo mới mỗi lần
-        try {
-            shutterSound?.play(MediaActionSound.SHUTTER_CLICK)
-        } catch (_: Exception) {}
+        if (AppSettingsStore.isTimeMarkShutterSoundEnabled(this)) {
+            try {
+                shutterSound?.play(MediaActionSound.SHUTTER_CLICK)
+            } catch (_: Exception) {}
+        }
+
+        if (!AppSettingsStore.isTimeMarkVibrationEnabled(this)) return
 
         try {
             val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/scanned_barcode_item.dart';
+import '../services/app_settings_service.dart';
 import '../services/barcode_scanner_service.dart';
 
 enum _BarcodeSectionTab { today, shared, archive }
@@ -27,6 +28,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
   @override
   void initState() {
     super.initState();
+    AppSettingsService.load();
     _loadData();
   }
 
@@ -71,16 +73,19 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
 
     bool keepAll = false;
     if (totalDupCount > 0) {
+      await AppSettingsService.load();
       if (!mounted) {
         await BarcodeScannerService.deleteAllImages(scannedBatch);
         return;
       }
-      keepAll = await _showPostScanDuplicateDialog(
-        totalScanned: scannedBatch.length,
-        brandNew: classified.brandNew,
-        dupInPending: classified.dupInPending,
-        dupInShared: classified.dupInShared,
-      );
+      if (AppSettingsService.current.barcodePostScanDupDialogEnabled) {
+        keepAll = await _showPostScanDuplicateDialog(
+          totalScanned: scannedBatch.length,
+          brandNew: classified.brandNew,
+          dupInPending: classified.dupInPending,
+          dupInShared: classified.dupInShared,
+        );
+      }
     }
 
     final List<ScannedBarcodeItem> itemsToAdd =

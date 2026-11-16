@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import '../models/app_settings.dart';
 import '../models/call_recording_item.dart';
+import '../services/app_settings_service.dart';
 import '../services/call_recording_service.dart';
+import '../services/timemark_service.dart';
 import 'call_recordings_screen.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -10,8 +13,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../providers/call_log_provider.dart';
 import '../services/app_update_service.dart';
 import '../services/license_api_service.dart';
+import '../widgets/app_settings_tab.dart';
 import '../widgets/floating_window_widget.dart';
 import '../widgets/fake_gps_widget.dart';
+import '../widgets/tab_guide_banner.dart';
 import '../widgets/timemark_camera_widget.dart';
 import 'payment_reconciliation_screen.dart';
 import 'payment_account_settings_screen.dart';
@@ -25,8 +30,13 @@ class SimpleHomeScreen extends StatefulWidget {
 }
 
 class _SimpleHomeScreenState extends State<SimpleHomeScreen>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
+  static const MethodChannel _eventsChannel = MethodChannel(
+    'call_log_manager_events',
+  );
   final AppUpdateService _appUpdateService = AppUpdateService();
+  late final TabController _tabController;
+  final Set<int> _visitedTabs = <int>{0};
   bool _isCallLogDefaultSmsApp = false;
   StreamSubscription<CallRecordingEvent>? _recordingEventSub;
   List<CallRecordingItem> _recordings = const [];
@@ -43,16 +53,36 @@ class _SimpleHomeScreenState extends State<SimpleHomeScreen>
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 5, vsync: this)
+      ..addListener(_onTabChanged);
     WidgetsBinding.instance.addObserver(this);
+    _eventsChannel.setMethodCallHandler(_handleNativeEvent);
     _recordingEventSub = CallRecordingService.events.listen(
       _handleRecordingEvent,
     );
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      AppSettingsService.load();
       _refreshDefaultSmsStatus();
       _loadCallLogs(force: false);
       _refreshCallRecordingState();
       _checkForAppUpdate();
     });
+  }
+
+  void _onTabChanged() {
+    final idx = _tabController.index;
+    if (_visitedTabs.contains(idx) || !mounted) return;
+    setState(() {
+      _visitedTabs.add(idx);
+    });
+  }
+
+  Future<void> _handleNativeEvent(MethodCall call) async {
+    if (call.method == 'captureTimeMark') {
+      try {
+        await TimeMarkService.openQuickCamera();
+      } catch (_) {}
+    }
   }
 
   @override
@@ -71,6 +101,9 @@ class _SimpleHomeScreenState extends State<SimpleHomeScreen>
 
   @override
   void dispose() {
+    _eventsChannel.setMethodCallHandler(null);
+    _tabController.removeListener(_onTabChanged);
+    _tabController.dispose();
     _recordingEventSub?.cancel();
     _playbackStateNotifier.dispose();
     _homeAudioDragMsNotifier.dispose();
@@ -175,81 +208,89 @@ class _SimpleHomeScreenState extends State<SimpleHomeScreen>
     if (_hasCallRecPerms && _hasOverlayPerm) {
       return const SizedBox.shrink();
     }
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: Colors.amber[50],
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.amber[300]!),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    return ValueListenableBuilder<AppSettings>(
+      valueListenable: AppSettingsService.notifier,
+      builder: (context, settings, _) {
+        if (!settings.callRecordingSetupWarningEnabled) {
+          return const SizedBox.shrink();
+        }
+        return Container(
+          margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.amber[50],
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: Colors.amber[300]!),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.mic, color: Colors.amber[900], size: 18),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  'Cấp quyền để hiện nút Ghi âm chủ động trong cuộc gọi',
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.amber[900],
+              Row(
+                children: [
+                  Icon(Icons.mic, color: Colors.amber[900], size: 18),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Cấp quyền để hiện nút Ghi âm chủ động trong cuộc gọi',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.amber[900],
+                      ),
+                    ),
                   ),
-                ),
+                  TextButton(
+                    onPressed: _openCallRecordingsScreen,
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text('Chi tiết', style: TextStyle(fontSize: 12)),
+                  ),
+                ],
               ),
-              TextButton(
-                onPressed: _openCallRecordingsScreen,
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  minimumSize: Size.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-                child: const Text('Chi tiết', style: TextStyle(fontSize: 12)),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  if (!_hasCallRecPerms)
+                    ElevatedButton.icon(
+                      onPressed: _requestCallRecPermissionsFromHome,
+                      icon: const Icon(Icons.mic, size: 15),
+                      label: const Text('Cấp Micro, ĐT & Nhật ký'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blue[700],
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        textStyle: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  if (!_hasOverlayPerm)
+                    ElevatedButton.icon(
+                      onPressed: CallRecordingService.openOverlaySettings,
+                      icon: const Icon(Icons.layers_outlined, size: 15),
+                      label: const Text('Hiện nút Ghi âm trên cuộc gọi'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.orange[800],
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        textStyle: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                ],
               ),
             ],
           ),
-          const SizedBox(height: 6),
-          Wrap(
-            spacing: 8,
-            runSpacing: 6,
-            children: [
-              if (!_hasCallRecPerms)
-                ElevatedButton.icon(
-                  onPressed: _requestCallRecPermissionsFromHome,
-                  icon: const Icon(Icons.mic, size: 15),
-                  label: const Text('Cấp Micro, ĐT & Nhật ký'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blue[700],
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
-                    textStyle: const TextStyle(fontSize: 12),
-                  ),
-                ),
-              if (!_hasOverlayPerm)
-                ElevatedButton.icon(
-                  onPressed: CallRecordingService.openOverlaySettings,
-                  icon: const Icon(Icons.layers_outlined, size: 15),
-                  label: const Text('Hiện nút Ghi âm trên cuộc gọi'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.orange[800],
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
-                    textStyle: const TextStyle(fontSize: 12),
-                  ),
-                ),
-            ],
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -495,8 +536,15 @@ class _SimpleHomeScreenState extends State<SimpleHomeScreen>
     bool forceCheck = false,
     bool delay = true,
   }) async {
+    if (!forceCheck) {
+      final settings = await AppSettingsService.load();
+      if (!settings.autoCheckUpdateEnabled || !mounted) return;
+    }
     if (delay) await Future<void>.delayed(const Duration(seconds: 3));
     if (!mounted) return;
+    if (!forceCheck && !AppSettingsService.current.autoCheckUpdateEnabled) {
+      return;
+    }
     _lastUpdateCheckAt = DateTime.now();
     await _appUpdateService.checkForUpdate(context, forceCheck: forceCheck);
   }
@@ -535,60 +583,267 @@ class _SimpleHomeScreenState extends State<SimpleHomeScreen>
     }
   }
 
+  Widget _buildDefaultSmsBanner() {
+    if (!_isCallLogDefaultSmsApp) return const SizedBox.shrink();
+    return ValueListenableBuilder<AppSettings>(
+      valueListenable: AppSettingsService.notifier,
+      builder: (context, settings, _) {
+        if (!settings.defaultSmsWarningEnabled) return const SizedBox.shrink();
+        return Container(
+          color: const Color(0xFFFFF3CD),
+          padding: const EdgeInsets.only(left: 12, right: 4, top: 4, bottom: 4),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.warning_amber_rounded,
+                color: Color(0xFF9A6500),
+                size: 21,
+              ),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'Delivery Support đang là app SMS mặc định; tin mới có thể không báo.',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Color(0xFF684700),
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+              IconButton(
+                onPressed: _openDefaultSmsSettings,
+                tooltip: 'Đổi ứng dụng SMS mặc định',
+                icon: const Icon(
+                  Icons.settings_outlined,
+                  color: Color(0xFF684700),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildDeliveryTab() {
+    return Consumer<CallLogProvider>(
+      builder: (context, provider, child) {
+        return RefreshIndicator(
+          onRefresh: () => _loadCallLogs(force: true),
+          child: SingleChildScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 20),
+            child: Column(
+              children: [
+                const TabGuideBanner(
+                  title: 'Hướng dẫn cài đặt & sử dụng Giao hàng',
+                  accentColor: Colors.blue,
+                  sections: [
+                    TabGuideSection(
+                      heading: 'Cài đặt ban đầu',
+                      steps: [
+                        'Bật công tắc "Bong bóng trôi nổi" và cấp quyền Hiển thị trên ứng dụng khác.',
+                        'Cấp quyền Nhật ký cuộc gọi để đồng bộ danh sách cuộc gọi giao hàng gần nhất.',
+                        'Cấp quyền Micro & Điện thoại (ở thẻ nhắc phía trên hoặc trong Kho ghi âm) để hiện nút Ghi âm chủ động từng cuộc gọi.',
+                      ],
+                    ),
+                    TabGuideSection(
+                      heading: 'Cách sử dụng khi đi giao',
+                      steps: [
+                        'Chạm bong bóng nổi để xem 2–6 cuộc gọi gần nhất ngay trên màn hình app giao hàng.',
+                        'Trong cuộc gọi bấm nút Ghi âm chủ động, hoặc bấm Thêm → Ghi âm trên máy Xiaomi và chọn thư mục đồng bộ trong Kho ghi âm nếu VoLTE chặn mic app (không cần Trợ năng).',
+                        'Bấm biểu tượng "₫" trên popup để xem nhanh các đơn đang chờ chuyển khoản ngay trên đường; chỉnh độ mờ bong bóng/popup trong tab Cài đặt.',
+                      ],
+                    ),
+                  ],
+                ),
+                const FloatingWindowWidget(),
+                _buildCallRecordingSetupBanner(),
+                _buildLatestCallsPreview(provider),
+                if (provider.getLatestCalls(count: 4).isEmpty)
+                  _buildEmptyCallsRecordingShortcut(),
+                _buildHomeInlinePlayer(),
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildMessagingQrTab() {
+    return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 20),
+      child: Column(
+        children: [
+          const TabGuideBanner(
+            title: 'Hướng dẫn cài đặt & sử dụng Nhắn tin QR',
+            accentColor: Colors.green,
+            sections: [
+              TabGuideSection(
+                heading: '1. Cài đặt SMS & Quyền nhận phản hồi',
+                steps: [
+                  'Bấm "Cấp quyền SMS" ở cuối thẻ dưới để gửi SMS nhanh trực tiếp từ popup nổi qua SIM.',
+                  'Bấm "Cấp quyền nhận SMS" để app tự nhận biết khi khách trả lời SMS trên các đơn đang chờ chuyển khoản.',
+                  'Nếu bật "SMS ảo cho icon SMS từ app": mở SMS từ app giao hàng sẽ ghi vào mục Đã gửi mà không tốn cước. Xong việc nhớ giữ app SMS chính làm mặc định để không lỡ tin nhắn mới.',
+                ],
+              ),
+              TabGuideSection(
+                heading: '2. Soạn mẫu tin & Nút ghi chú nhanh',
+                steps: [
+                  'Nhập mẫu nội dung đứng trước số tiền (VD: Số TK + Ngân hàng + Tên chủ TK). App tự bỏ dấu tiếng Việt để tối ưu vừa 1 SMS (160 ký tự) và hiển thị xem trước ngay bên dưới.',
+                  'Tạo tối đa 6 "Nút mẫu ghi chú nhanh" (nhãn ngắn + nội dung đính sau số tiền) để bấm 1 chạm trên popup nổi không cần gõ tay.',
+                ],
+              ),
+              TabGuideSection(
+                heading: '3. Cài đặt Tài khoản & QR tĩnh Zalo',
+                steps: [
+                  'Mở mục "Cấu hình Tài khoản QR Zalo" bên dưới, chọn đúng ngân hàng (VietQR), nhập Số tài khoản và Tên chủ tài khoản.',
+                  'Đợi QR tĩnh xem trước tải xong, dùng app ngân hàng quét thử kiểm tra đúng người nhận rồi tick xác nhận và Lưu.',
+                ],
+              ),
+              TabGuideSection(
+                heading: '4. Cách gửi SMS / QR Zalo từ popup nổi',
+                steps: [
+                  'Chạm bong bóng nổi → chọn biểu tượng tin nhắn cạnh SĐT khách → nhập Số tiền (và chạm ghi chú nhanh nếu cần).',
+                  'Bấm nút SMS để gửi SIM và quét mã vận đơn; hoặc bấm nút Z (Zalo) để quét mã đơn, tự chuẩn bị QR tĩnh & mở thẳng Zalo theo SĐT khách (chỉ việc dán nội dung và gửi ảnh QR).',
+                ],
+              ),
+            ],
+            highlightNote:
+                'Mọi đơn gửi qua SMS hay Zalo có kèm số tiền đều tự lưu sang tab Đối soát (mục Chờ chuyển) để bạn theo dõi tiền về.',
+          ),
+          const _SmsTemplateConfigWidget(),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: Card(
+              color: Colors.green.shade50.withValues(alpha: 0.5),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+                side: BorderSide(color: Colors.green.shade200),
+              ),
+              child: ListTile(
+                leading: Icon(
+                  Icons.account_balance_outlined,
+                  color: Colors.green.shade800,
+                ),
+                title: const Text(
+                  'Cấu hình Tài khoản QR Zalo',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                ),
+                subtitle: const Text(
+                  'Thiết lập ngân hàng và quét xác nhận QR tĩnh',
+                  style: TextStyle(fontSize: 12),
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push<bool>(
+                  MaterialPageRoute<bool>(
+                    builder: (_) => const PaymentAccountSettingsScreen(),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUtilitiesTab() {
+    return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 20),
+      child: Column(
+        children: [
+          const TabGuideBanner(
+            title: 'Hướng dẫn cài đặt & sử dụng Tiện ích',
+            accentColor: Colors.purple,
+            sections: [
+              TabGuideSection(
+                heading: 'Fake GPS (Vị trí giả lập)',
+                steps: [
+                  'Bật Tùy chọn nhà phát triển trên Android → Chọn ứng dụng vị trí giả (Mock location) → chọn Delivery Support.',
+                  'Chọn điểm trên bản đồ hoặc từ danh sách đã lưu rồi bật Fake GPS; tắt ngay khi không cần để GPS thật hoạt động bình thường.',
+                ],
+              ),
+              TabGuideSection(
+                heading: 'TimeMark & Quét Mã Vạch / QR',
+                steps: [
+                  'TimeMark: Chụp ảnh giao hàng gắn sẵn thời gian, tọa độ GPS và mã đơn (hỗ trợ chụp 1 chạm hoặc chụp liên tiếp).',
+                  'Quét Mã Vạch & QR Code: Hỗ trợ quét liên tục nhiều mã, âm báo và cảnh báo phân biệt mã mới / mã đã quét hôm nay / mã đã chia sẻ.',
+                ],
+              ),
+            ],
+          ),
+          const FakeGpsWidget(),
+          const TimeMarkCameraWidget(),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: Card(
+              color: Colors.purple.shade50.withValues(alpha: 0.5),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+                side: BorderSide(color: Colors.purple.shade200),
+              ),
+              child: ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.purple.shade100,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    Icons.qr_code_scanner,
+                    color: Colors.purple.shade800,
+                  ),
+                ),
+                title: const Text(
+                  'Quét Mã Vạch & QR Code',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                ),
+                subtitle: const Text(
+                  'Quét liên tục, xem danh sách, copy & chia sẻ',
+                  style: TextStyle(fontSize: 12),
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const BarcodeScannerScreen(),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        toolbarHeight: 50,
         leading: const _DonateCardWidget(),
-        leadingWidth: 88,
+        leadingWidth: 84,
         titleSpacing: 0,
         centerTitle: false,
         title: const Text(
-          'APP NVPTTT',
+          'Delivery Support',
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
         ),
         backgroundColor: Colors.blue[700],
         elevation: 2,
-        bottom: _isCallLogDefaultSmsApp
-            ? PreferredSize(
-                preferredSize: const Size.fromHeight(56),
-                child: Container(
-                  color: const Color(0xFFFFF3CD),
-                  padding: const EdgeInsets.only(left: 12, right: 4),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.warning_amber_rounded,
-                        color: Color(0xFF9A6500),
-                        size: 21,
-                      ),
-                      const SizedBox(width: 8),
-                      const Expanded(
-                        child: Text(
-                          'CallLog đang là app SMS mặc định; tin mới có thể không báo.',
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: Color(0xFF684700),
-                            fontSize: 12,
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: _openDefaultSmsSettings,
-                        tooltip: 'Đổi ứng dụng SMS mặc định',
-                        icon: const Icon(
-                          Icons.settings_outlined,
-                          color: Color(0xFF684700),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              )
-            : null,
         actions: [
           IconButton(
             icon: const Icon(Icons.system_update, color: Colors.white),
@@ -596,247 +851,98 @@ class _SimpleHomeScreenState extends State<SimpleHomeScreen>
             tooltip: 'Kiểm tra cập nhật',
           ),
           IconButton(
-            icon: const Icon(Icons.receipt_long, color: Colors.white),
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => const PaymentReconciliationScreen(),
-                ),
-              );
-            },
-            tooltip: 'Đối soát chuyển khoản',
-          ),
-          IconButton(
             icon: const Icon(Icons.refresh, color: Colors.white),
-            onPressed: () => _loadCallLogs(force: true),
+            onPressed: () {
+              _loadCallLogs(force: true);
+              _refreshCallRecordingState();
+              AppSettingsService.load(force: true);
+            },
             tooltip: 'Làm mới',
           ),
         ],
       ),
-      body: Consumer<CallLogProvider>(
-        builder: (context, provider, child) {
-          return SingleChildScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 24),
-            child: Column(
+      body: Column(
+        children: [
+          _buildDefaultSmsBanner(),
+          Expanded(
+            child: TabBarView(
+              controller: _tabController,
+              physics: const NeverScrollableScrollPhysics(),
               children: [
-                // Thẻ 1: Giao hàng & Chuyển khoản (Xanh dương)
-                Card(
-                  elevation: 1.5,
-                  margin: const EdgeInsets.only(bottom: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    side: BorderSide(color: Colors.blue.withValues(alpha: 0.2)),
-                  ),
-                  child: ExpansionTile(
-                    initiallyExpanded: true,
-                    shape: const Border(),
-                    collapsedShape: const Border(),
-                    leading: Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.blue.shade50,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Icon(
-                        Icons.local_shipping_outlined,
-                        color: Colors.blue.shade700,
-                      ),
-                    ),
-                    title: const Text(
-                      'Giao hàng & Chuyển khoản',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                    ),
-                    subtitle: const Text(
-                      'Popup nổi, cuộc gọi và đối soát thanh toán',
-                      style: TextStyle(fontSize: 12),
-                    ),
-                    children: [
-                      const FloatingWindowWidget(),
-                      _buildCallRecordingSetupBanner(),
-                      _buildLatestCallsPreview(provider),
-                      if (provider.getLatestCalls(count: 4).isEmpty)
-                        _buildEmptyCallsRecordingShortcut(),
-                      _buildHomeInlinePlayer(),
-                      const SizedBox(height: 8),
-                    ],
-                  ),
+                _LazyKeepAliveTab(
+                  shouldBuild: _visitedTabs.contains(0),
+                  builder: (_) => _buildDeliveryTab(),
                 ),
-
-                // Thẻ 2: Cài đặt Tin nhắn & QR Zalo (Xanh lá)
-                Card(
-                  elevation: 1.5,
-                  margin: const EdgeInsets.only(bottom: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    side: BorderSide(color: Colors.green.withValues(alpha: 0.2)),
-                  ),
-                  child: ExpansionTile(
-                    initiallyExpanded: false,
-                    shape: const Border(),
-                    collapsedShape: const Border(),
-                    leading: Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.green.shade50,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Icon(
-                        Icons.tune_outlined,
-                        color: Colors.green.shade700,
-                      ),
-                    ),
-                    title: const Text(
-                      'Cài đặt Nhắn tin & QR Zalo',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                    ),
-                    subtitle: const Text(
-                      'Mẫu tin SMS, 6 nút chọn & tài khoản ngân hàng',
-                      style: TextStyle(fontSize: 12),
-                    ),
-                    children: [
-                      const _SmsTemplateConfigWidget(),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                        child: Card(
-                          color: Colors.green.shade50.withValues(alpha: 0.5),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
-                            side: BorderSide(color: Colors.green.shade200),
-                          ),
-                          child: ListTile(
-                            leading: Icon(
-                              Icons.account_balance_outlined,
-                              color: Colors.green.shade800,
-                            ),
-                            title: const Text(
-                              'Cấu hình Tài khoản QR Zalo',
-                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                            ),
-                            subtitle: const Text(
-                              'Thiết lập ngân hàng và quét xác nhận QR tĩnh',
-                              style: TextStyle(fontSize: 12),
-                            ),
-                            trailing: const Icon(Icons.chevron_right),
-                            onTap: () => Navigator.of(context).push<bool>(
-                              MaterialPageRoute<bool>(
-                                builder: (_) => const PaymentAccountSettingsScreen(),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                _LazyKeepAliveTab(
+                  shouldBuild: _visitedTabs.contains(1),
+                  builder: (_) => _buildMessagingQrTab(),
                 ),
-
-                // Thẻ 3: Tiện ích mở rộng (Cam)
-                Card(
-                  elevation: 1.5,
-                  margin: const EdgeInsets.only(bottom: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    side: BorderSide(color: Colors.orange.withValues(alpha: 0.2)),
-                  ),
-                  child: ExpansionTile(
-                    initiallyExpanded: false,
-                    shape: const Border(),
-                    collapsedShape: const Border(),
-                    leading: Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.orange.shade50,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Icon(
-                        Icons.widgets_outlined,
-                        color: Colors.orange.shade800,
-                      ),
-                    ),
-                    title: const Text(
-                      'Tiện ích mở rộng',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                    ),
-                    subtitle: const Text(
-                      'Vị trí giả lập và TimeMark Camera',
-                      style: TextStyle(fontSize: 12),
-                    ),
-                    children: [
-                      const FakeGpsWidget(),
-                      const TimeMarkCameraWidget(),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                        child: Card(
-                          color: Colors.purple.shade50.withValues(alpha: 0.5),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
-                            side: BorderSide(color: Colors.purple.shade200),
-                          ),
-                          child: ListTile(
-                            leading: Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: Colors.purple.shade100,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Icon(
-                                Icons.qr_code_scanner,
-                                color: Colors.purple.shade800,
-                              ),
-                            ),
-                            title: const Text(
-                              'Quét Mã Vạch & QR Code',
-                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                            ),
-                            subtitle: const Text(
-                              'Quét liên tục, xem danh sách, copy & chia sẻ',
-                              style: TextStyle(fontSize: 12),
-                            ),
-                            trailing: const Icon(Icons.chevron_right),
-                            onTap: () => Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => const BarcodeScannerScreen(),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                    ],
-                  ),
+                _LazyKeepAliveTab(
+                  shouldBuild: _visitedTabs.contains(2),
+                  builder: (_) => const PaymentReconciliationScreen(embedded: true),
+                ),
+                _LazyKeepAliveTab(
+                  shouldBuild: _visitedTabs.contains(3),
+                  builder: (_) => _buildUtilitiesTab(),
+                ),
+                _LazyKeepAliveTab(
+                  shouldBuild: _visitedTabs.contains(4),
+                  builder: (_) => const AppSettingsTab(),
                 ),
               ],
             ),
-          );
-        },
+          ),
+        ],
       ),
-      bottomNavigationBar: Container(
-        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.05),
-              blurRadius: 4,
-              offset: const Offset(0, -2),
-            ),
-          ],
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: const [
-            Icon(Icons.verified, size: 14, color: Colors.blue),
-            SizedBox(width: 6),
-            Text(
-              'Thiết kế bởi Thức Đặng',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                color: Colors.blueGrey,
-                letterSpacing: 0.5,
+      bottomNavigationBar: Material(
+        color: Colors.white,
+        elevation: 6,
+        child: SafeArea(
+          top: false,
+          child: Container(
+            height: 50,
+            decoration: BoxDecoration(
+              border: Border(
+                top: BorderSide(color: Colors.grey.shade200, width: 1),
               ),
             ),
-          ],
+            child: TabBar(
+              controller: _tabController,
+              labelColor: Colors.blue[700],
+              unselectedLabelColor: Colors.grey[600],
+              labelPadding: const EdgeInsets.symmetric(horizontal: 2),
+              indicator: BoxDecoration(
+                border: Border(
+                  top: BorderSide(color: Colors.blue[700]!, width: 2.5),
+                ),
+                color: Colors.blue.withValues(alpha: 0.06),
+              ),
+              indicatorSize: TabBarIndicatorSize.tab,
+              dividerColor: Colors.transparent,
+              tabs: const [
+                _CompactBottomTab(
+                  icon: Icons.local_shipping_outlined,
+                  label: 'Giao hàng',
+                ),
+                _CompactBottomTab(
+                  icon: Icons.sms_outlined,
+                  label: 'Nhắn tin QR',
+                ),
+                _CompactBottomTab(
+                  icon: Icons.receipt_long_outlined,
+                  label: 'Đối soát',
+                ),
+                _CompactBottomTab(
+                  icon: Icons.widgets_outlined,
+                  label: 'Tiện ích',
+                ),
+                _CompactBottomTab(
+                  icon: Icons.settings_outlined,
+                  label: 'Cài đặt',
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -1154,12 +1260,7 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _controller.addListener(_onControllerChanged);
     _loadConfig();
-  }
-
-  void _onControllerChanged() {
-    if (mounted) setState(() {});
   }
 
   @override
@@ -1482,8 +1583,8 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
           SnackBar(
             content: Text(
               enabled
-                  ? 'Icon SMS từ GHN sẽ tạo SMS ảo; SMS nhanh trong popup vẫn gửi qua SIM'
-                  : 'Icon SMS từ GHN sẽ hiện lựa chọn SMS ảo hoặc gửi thật',
+                  ? 'Icon SMS từ app sẽ tạo SMS ảo; SMS nhanh trong popup vẫn gửi qua SIM'
+                  : 'Icon SMS từ app sẽ hiện lựa chọn SMS ảo hoặc gửi thật',
             ),
             backgroundColor: enabled ? Colors.green[700] : Colors.grey[700],
             duration: const Duration(seconds: 2),
@@ -1891,7 +1992,6 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _controller.removeListener(_onControllerChanged);
     _controller.dispose();
     super.dispose();
   }
@@ -1957,23 +2057,32 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          Wrap(
+            spacing: 6,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              Icon(
-                Icons.chat_bubble_outline_rounded,
-                size: 16,
-                color: isOver160 ? Colors.orange.shade800 : Colors.blue.shade700,
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.chat_bubble_outline_rounded,
+                    size: 16,
+                    color: isOver160 ? Colors.orange.shade800 : Colors.blue.shade700,
+                  ),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      'Xem trước SMS thực tế gửi khách:',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: isOver160 ? Colors.orange.shade900 : Colors.blue.shade900,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(width: 6),
-              Text(
-                'Xem trước SMS thực tế gửi khách:',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                  color: isOver160 ? Colors.orange.shade900 : Colors.blue.shade900,
-                ),
-              ),
-              const Spacer(),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                 decoration: BoxDecoration(
@@ -2110,12 +2219,14 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
             children: [
               Icon(Icons.sms, color: Colors.green[700], size: 22),
               const SizedBox(width: 8),
-              Text(
-                'Cấu hình Tin nhắn Nhanh (SMS)',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.green[800],
+              Expanded(
+                child: Text(
+                  'Cấu hình Tin nhắn Nhanh (SMS)',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.green[800],
+                  ),
                 ),
               ),
             ],
@@ -2249,7 +2360,7 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
             },
           ),
 
-          // === Cấu hình SMS ảo cho icon SMS từ GHN ===
+          // === Cấu hình SMS ảo cho icon SMS từ app ===
           const SizedBox(height: 8),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -2282,7 +2393,7 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
                         children: [
                           Flexible(
                             child: Text(
-                              'SMS ảo cho icon SMS từ GHN',
+                              'SMS ảo cho icon SMS từ app',
                               style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
@@ -2349,15 +2460,21 @@ class _SmsTemplateConfigWidgetState extends State<_SmsTemplateConfigWidget>
             style: const TextStyle(fontSize: 13),
           ),
           const SizedBox(height: 12),
-          _buildLiveSmsPreview(),
+          ValueListenableBuilder<TextEditingValue>(
+            valueListenable: _controller,
+            builder: (_, __, ___) => _buildLiveSmsPreview(),
+          ),
           const SizedBox(height: 16),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text(
-                'Nút mẫu ghi chú nhanh (Tối đa 6)',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+              const Expanded(
+                child: Text(
+                  'Nút mẫu ghi chú nhanh (Tối đa 6)',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                ),
               ),
+              const SizedBox(width: 8),
               Text(
                 '${_quickNotes.length}/6',
                 style: TextStyle(
@@ -2750,6 +2867,73 @@ class _DonateCardWidget extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _LazyKeepAliveTab extends StatefulWidget {
+  const _LazyKeepAliveTab({required this.shouldBuild, required this.builder});
+
+  final bool shouldBuild;
+  final WidgetBuilder builder;
+
+  @override
+  State<_LazyKeepAliveTab> createState() => _LazyKeepAliveTabState();
+}
+
+class _LazyKeepAliveTabState extends State<_LazyKeepAliveTab>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => widget.shouldBuild;
+
+  @override
+  void didUpdateWidget(covariant _LazyKeepAliveTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.shouldBuild != oldWidget.shouldBuild) {
+      updateKeepAlive();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    if (!widget.shouldBuild) {
+      return const SizedBox.shrink();
+    }
+    return widget.builder(context);
+  }
+}
+
+class _CompactBottomTab extends StatelessWidget {
+  const _CompactBottomTab({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tab(
+      height: 48,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 18),
+          const SizedBox(height: 2),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              label,
+              maxLines: 1,
+              softWrap: false,
+              style: const TextStyle(
+                fontSize: 10.5,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

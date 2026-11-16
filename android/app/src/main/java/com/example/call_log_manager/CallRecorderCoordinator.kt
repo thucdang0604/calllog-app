@@ -137,6 +137,9 @@ internal object CallRecorderCoordinator {
                 if (wasOffhook || CallRecorderService.isRunning) {
                     stopManualRecording(appContext, stoppedByUserWhileInCall = false)
                 }
+                if (wasOffhook) {
+                    SystemCallRecordingSync.schedulePostCallSync(appContext)
+                }
                 hideInCallOverlayPill(appContext)
                 uiStatus = RecordingUiStatus.IDLE
                 recordingStartedAtMs = 0L

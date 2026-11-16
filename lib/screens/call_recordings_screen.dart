@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../models/app_settings.dart';
 import '../models/call_recording_item.dart';
+import '../services/app_settings_service.dart';
 import '../services/call_recording_service.dart';
 
 enum _CallFilter { all, incoming, outgoing }
@@ -21,7 +23,12 @@ class _CallRecordingsScreenState extends State<CallRecordingsScreen>
 
   List<CallRecordingItem> _recordings = const [];
   CallPlaybackState _playbackState = const CallPlaybackState.idle();
+  CallRecordingDiagnostic _diagnostic = const CallRecordingDiagnostic();
+  SystemCallRecSyncStatus _syncStatus = const SystemCallRecSyncStatus();
   bool _isLoading = true;
+  bool _isSyncingSystem = false;
+  bool _didInitialAutoSync = false;
+  bool _showXiaomiGuide = false;
   bool _hasPermissions = false;
   bool _hasOverlayPermission = false;
   String _audioSource = 'auto';
@@ -40,6 +47,7 @@ class _CallRecordingsScreenState extends State<CallRecordingsScreen>
     ('camcorder', 'Camcorder Mic (Ít lọc âm / hợp Loa ngoài)'),
     ('voice_recognition', 'Voice Recognition'),
     ('voice_communication', 'Voice Communication (VoIP/Loa)'),
+    ('unprocessed', 'Unprocessed Mic (Thô không lọc âm)'),
     ('voice_call', 'Voice Call (Thu 2 chiều hệ thống)'),
   ];
 
@@ -48,6 +56,7 @@ class _CallRecordingsScreenState extends State<CallRecordingsScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _eventSub = CallRecordingService.events.listen(_handleRecordingEvent);
+    AppSettingsService.load();
     _loadAll();
   }
 
@@ -92,20 +101,117 @@ class _CallRecordingsScreenState extends State<CallRecordingsScreen>
       CallRecordingService.getRecordings(),
       CallRecordingService.getAudioSource(),
       CallRecordingService.getPlaybackState(),
+      CallRecordingService.getDiagnostic(),
+      CallRecordingService.getSystemSyncStatus(),
     ]);
     if (!mounted) return;
     final loaded = results[2] as List<CallRecordingItem>;
+    final diag = results[5] as CallRecordingDiagnostic;
+    final syncStatus = results[6] as SystemCallRecSyncStatus;
     setState(() {
       _hasPermissions = results[0] as bool;
       _hasOverlayPermission = results[1] as bool;
       _recordings = loaded;
       _audioSource = results[3] as String;
       _playbackState = results[4] as CallPlaybackState;
+      _diagnostic = diag;
+      _syncStatus = syncStatus;
+      if (!_didInitialAutoSync && !syncStatus.isReady && diag.silencedBySystem) {
+        _showXiaomiGuide = true;
+      }
       _selectedIds.removeWhere((id) => !loaded.any((r) => r.id == id));
       if (_selectedIds.isEmpty) {
         _isSelectionMode = false;
       }
     });
+
+    if (!_didInitialAutoSync) {
+      _didInitialAutoSync = true;
+      if (syncStatus.isReady) {
+        unawaited(_syncSystemRecordings(quiet: true));
+      }
+    }
+  }
+
+  Future<void> _syncSystemRecordings({bool quiet = false}) async {
+    if (_isSyncingSystem) return;
+    setState(() => _isSyncingSystem = true);
+    try {
+      final res = await CallRecordingService.syncSystemRecordings();
+      final updatedList = await CallRecordingService.getRecordings();
+      if (!mounted) return;
+      setState(() {
+        _syncStatus = res.status;
+        _recordings = updatedList;
+        _isSyncingSystem = false;
+      });
+      if (!quiet) {
+        final msg = res.importedCount > 0
+            ? 'Đã đồng bộ thêm ${res.importedCount} file ghi âm từ máy'
+            : 'Đã quét ${res.scannedCount} file — chưa có file mới cần đồng bộ';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(msg),
+            backgroundColor:
+                res.importedCount > 0 ? Colors.green[700] : Colors.blueGrey[700],
+          ),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _isSyncingSystem = false);
+      }
+    }
+  }
+
+  Future<void> _pickSystemFolder() async {
+    final res = await CallRecordingService.pickSystemCallRecFolder();
+    if (!mounted || res == null) return;
+    final updatedList = await CallRecordingService.getRecordings();
+    if (!mounted) return;
+    setState(() {
+      _syncStatus = res.status;
+      _recordings = updatedList;
+      _showXiaomiGuide = false;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          res.importedCount > 0
+              ? 'Đã kết nối "${res.status.folderLabel}" và đồng bộ ${res.importedCount} file'
+              : 'Đã kết nối thư mục "${res.status.folderLabel}" — máy sẽ tự đồng bộ sau mỗi cuộc gọi',
+        ),
+        backgroundColor: Colors.green[700],
+      ),
+    );
+  }
+
+  Future<void> _requestMediaSyncPermission() async {
+    setState(() => _isSyncingSystem = true);
+    final granted = await CallRecordingService.requestSystemMediaPermission();
+    if (!mounted) return;
+    await _refreshStatusAndRecordings();
+    if (!mounted) return;
+    setState(() => _isSyncingSystem = false);
+    if (granted) {
+      await _syncSystemRecordings(quiet: false);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text(
+            'Chưa được cấp quyền Audio. Bạn nên dùng nút "Chọn thư mục ghi âm máy" cho ổn định nhất.',
+          ),
+          backgroundColor: Colors.orange[800],
+        ),
+      );
+    }
+  }
+
+  Future<void> _handlePullToRefresh() async {
+    if (_syncStatus.isReady) {
+      await _syncSystemRecordings(quiet: true);
+    }
+    await _refreshStatusAndRecordings();
   }
 
   Future<void> _reloadRecordingsOnly() async {
@@ -546,7 +652,12 @@ class _CallRecordingsScreenState extends State<CallRecordingsScreen>
       ),
       body: Column(
         children: [
-          _buildStatusOrSetupCard(),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 280),
+            child: SingleChildScrollView(
+              child: _buildStatusOrSetupCard(),
+            ),
+          ),
           _buildStorageAndFilterSection(
             totalCount: _recordings.length,
             totalBytes: totalBytes,
@@ -557,7 +668,7 @@ class _CallRecordingsScreenState extends State<CallRecordingsScreen>
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
                 : RefreshIndicator(
-                    onRefresh: _refreshStatusAndRecordings,
+                    onRefresh: _handlePullToRefresh,
                     child: filtered.isEmpty
                         ? _buildEmptyState()
                         : ListView.builder(
@@ -576,36 +687,19 @@ class _CallRecordingsScreenState extends State<CallRecordingsScreen>
   }
 
   Widget _buildStatusOrSetupCard() {
-    if (_hasPermissions && _hasOverlayPermission) {
-      return Container(
-        margin: const EdgeInsets.fromLTRB(12, 10, 12, 6),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: Colors.green[50],
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: Colors.green[200]!),
-        ),
-        child: Row(
-          children: [
-            Icon(Icons.fiber_manual_record, color: Colors.green[700], size: 16),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                'Ghi âm chủ động từng cuộc gọi • Bấm nút "Ghi âm" hiện khi đang gọi (không bấm sẽ không ghi) • Tự xóa sau 30 ngày',
-                style: TextStyle(
-                  fontSize: 12.5,
-                  color: Colors.green[900],
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (!_hasPermissions || !_hasOverlayPermission)
+          _buildMissingPermissionsCard(),
+        _buildSystemSyncCard(),
+      ],
+    );
+  }
 
+  Widget _buildMissingPermissionsCard() {
     return Container(
-      margin: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+      margin: const EdgeInsets.fromLTRB(12, 10, 12, 4),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: Colors.amber[50],
@@ -634,7 +728,7 @@ class _CallRecordingsScreenState extends State<CallRecordingsScreen>
           const SizedBox(height: 6),
           Text(
             '1) Cấp quyền Micro, Điện thoại & Nhật ký cuộc gọi.\n'
-            '2) Cấp quyền "Hiển thị trên ứng dụng khác" để khi gọi hiện nút "Ghi âm" nổi trên màn hình — không cần bật Trợ năng nên không ảnh hưởng app ngân hàng.',
+            '2) Cấp quyền "Hiển thị trên ứng dụng khác" để hiện nút "Ghi âm" khi đang gọi (không cần bật Trợ năng nên không ảnh hưởng app ngân hàng).',
             style: TextStyle(fontSize: 12, color: Colors.grey[800], height: 1.35),
           ),
           const SizedBox(height: 10),
@@ -674,6 +768,198 @@ class _CallRecordingsScreenState extends State<CallRecordingsScreen>
                 ),
             ],
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSystemSyncCard() {
+    final isReady = _syncStatus.isReady;
+    final hasSilenceDiag =
+        _diagnostic.hasAttempt && _diagnostic.silencedBySystem;
+    final bgColor = isReady
+        ? Colors.teal[50]!
+        : (hasSilenceDiag ? Colors.orange[50]! : Colors.blue[50]!);
+    final borderColor = isReady
+        ? Colors.teal[200]!
+        : (hasSilenceDiag ? Colors.orange[300]! : Colors.blue[200]!);
+    final accentColor = isReady
+        ? Colors.teal[800]!
+        : (hasSilenceDiag ? Colors.orange[900]! : Colors.blue[900]!);
+
+    final folderSummary = _syncStatus.hasTreePermission
+        ? 'Thư mục: ${_syncStatus.folderLabel}'
+        : (_syncStatus.hasMediaPermission
+            ? 'Đang bật quét Audio hệ thống'
+            : 'Chưa kết nối thư mục ghi âm máy');
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      padding: const EdgeInsets.fromLTRB(12, 9, 10, 9),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(11),
+        border: Border.all(color: borderColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            onTap: () => setState(() => _showXiaomiGuide = !_showXiaomiGuide),
+            borderRadius: BorderRadius.circular(8),
+            child: Row(
+              children: [
+                Icon(
+                  isReady
+                      ? Icons.sync_lock
+                      : (hasSilenceDiag
+                          ? Icons.warning_amber_rounded
+                          : Icons.folder_copy_outlined),
+                  color: accentColor,
+                  size: 19,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        isReady
+                            ? 'Tự đồng bộ ghi âm 2 chiều từ máy'
+                            : (hasSilenceDiag
+                                ? 'Máy đang chặn mic VoLTE — Dùng Ghi âm máy'
+                                : 'Đồng bộ ghi âm 2 chiều của máy (Không cần Trợ năng)'),
+                        style: TextStyle(
+                          fontSize: 12.8,
+                          fontWeight: FontWeight.w700,
+                          color: accentColor,
+                        ),
+                      ),
+                      Text(
+                        folderSummary,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 11.5, color: Colors.grey[800]),
+                      ),
+                    ],
+                  ),
+                ),
+                if (isReady)
+                  TextButton.icon(
+                    onPressed:
+                        _isSyncingSystem ? null : () => _syncSystemRecordings(),
+                    icon: _isSyncingSystem
+                        ? SizedBox(
+                            width: 13,
+                            height: 13,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: accentColor,
+                            ),
+                          )
+                        : Icon(Icons.sync, size: 15, color: accentColor),
+                    label: Text(
+                      _isSyncingSystem ? 'Đang quét' : 'Đồng bộ',
+                      style: TextStyle(
+                        fontSize: 11.8,
+                        fontWeight: FontWeight.w700,
+                        color: accentColor,
+                      ),
+                    ),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                  ),
+                Icon(
+                  _showXiaomiGuide ? Icons.expand_less : Icons.expand_more,
+                  color: accentColor,
+                ),
+              ],
+            ),
+          ),
+          if (_showXiaomiGuide || !isReady) ...[
+            const SizedBox(height: 8),
+            if (hasSilenceDiag)
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(bottom: 7),
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.78),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.orange[200]!),
+                ),
+                child: Text(
+                  'Chẩn đoán lần thu gần nhất (${_diagnostic.brand} ${_diagnostic.model}): '
+                  'Android / VoLTE đã khóa micro app thứ 3 (nguồn thử: ${_diagnostic.attemptedSources.isNotEmpty ? _diagnostic.attemptedSources : _diagnostic.audioSource}'
+                  ', Loa ngoài: ${_diagnostic.speakerOn ? 'Đang bật' : 'Tắt'}) vì Trợ năng đang TẮT để bảo vệ app ngân hàng.',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: Colors.orange[950],
+                    height: 1.32,
+                  ),
+                ),
+              ),
+            Text(
+              'Cách thu 2 chiều VoLTE rõ tiếng mà không bật Trợ năng:\n'
+              '1) Trên màn hình cuộc gọi Xiaomi: bấm "Thêm (⋮) → Ghi âm" (hoặc bật "Tự động ghi âm cuộc gọi" trong Cài đặt ứng dụng Điện thoại).\n'
+              '2) Bấm nút bên dưới chọn thư mục "${_syncStatus.suggestedFolder}" (chỉ cần 1 lần) — sau mỗi cuộc gọi Delivery Support tự nhập file vào đây.',
+              style: TextStyle(
+                fontSize: 11.8,
+                color: Colors.grey[850],
+                height: 1.36,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                ElevatedButton.icon(
+                  onPressed: _isSyncingSystem ? null : _pickSystemFolder,
+                  icon: const Icon(Icons.folder_open, size: 16),
+                  label: Text(
+                    _syncStatus.hasTreePermission
+                        ? 'Đổi thư mục (${_syncStatus.folderLabel})'
+                        : 'Chọn thư mục ghi âm máy',
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.teal[700],
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 11,
+                      vertical: 8,
+                    ),
+                    textStyle: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                if (!_syncStatus.hasMediaPermission)
+                  OutlinedButton.icon(
+                    onPressed:
+                        _isSyncingSystem ? null : _requestMediaSyncPermission,
+                    icon: const Icon(Icons.audio_file_outlined, size: 15),
+                    label: const Text('Quét quyền Audio'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.teal[800],
+                      side: BorderSide(color: Colors.teal[300]!),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 8,
+                      ),
+                      textStyle: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -934,23 +1220,52 @@ class _CallRecordingsScreenState extends State<CallRecordingsScreen>
                       ),
                     const SizedBox(height: 2),
                     Text(
-                      '${item.formattedDateTime} • ${item.formattedDuration} • ${item.formattedFileSize} • ${item.audioSource} • Còn ${item.daysRemainingBeforeAutoDelete}d',
+                      '${item.formattedDateTime} • ${item.formattedDuration} • ${item.formattedFileSize} • ${item.isSystemDialer ? "Hệ thống 2 chiều" : item.audioSource} • Còn ${item.daysRemainingBeforeAutoDelete}d',
                       style: TextStyle(
                         fontSize: 11.5,
                         color: Colors.grey[600],
                       ),
                     ),
-                    if (item.isSilentRecording)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 3),
+                    if (item.isSystemDialer)
+                      Container(
+                        margin: const EdgeInsets.only(top: 4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.teal[50],
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.teal[200]!),
+                        ),
                         child: Text(
-                          '⚠ File không có tín hiệu âm (bị hệ thống chặn mic khi gọi)',
+                          'Ghi âm hệ thống · 2 chiều VoLTE',
                           style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.orange[800],
+                            fontSize: 10.5,
+                            color: Colors.teal[800],
                             fontWeight: FontWeight.w600,
                           ),
                         ),
+                      ),
+                    if (item.isSilentRecording)
+                      ValueListenableBuilder<AppSettings>(
+                        valueListenable: AppSettingsService.notifier,
+                        builder: (context, settings, _) {
+                          if (!settings.callRecordingSilenceWarningEnabled) {
+                            return const SizedBox.shrink();
+                          }
+                          return Padding(
+                            padding: const EdgeInsets.only(top: 3),
+                            child: Text(
+                              '⚠ File không có tín hiệu âm (bị hệ thống chặn mic khi gọi)',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.orange[800],
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          );
+                        },
                       ),
                   ],
                 ),
@@ -984,7 +1299,7 @@ class _CallRecordingsScreenState extends State<CallRecordingsScreen>
                         children: [
                           Icon(Icons.share, size: 18),
                           SizedBox(width: 8),
-                          Text('Chia sẻ file .m4a'),
+                          Text('Chia sẻ file ghi âm'),
                         ],
                       ),
                     ),

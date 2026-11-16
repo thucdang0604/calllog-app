@@ -210,12 +210,12 @@ class AppUpdateService {
             _showReadyBanner(context, readyPath, readyVersion);
             _showMessage(
               context,
-              'Cho phép APP NVPTTT cài ứng dụng rồi quay lại để tiếp tục.',
+              'Cho phép Delivery Support cài ứng dụng rồi quay lại để tiếp tục.',
             );
           } else {
             _showMessage(
               context,
-              'Cho phép APP NVPTTT cài ứng dụng để tiếp tục cập nhật.',
+              'Cho phép Delivery Support cài ứng dụng để tiếp tục cập nhật.',
             );
           }
         }
@@ -352,7 +352,7 @@ class AppUpdateService {
           context,
           started == true
               ? 'Hãy xác nhận cài đặt trong cửa sổ Android.'
-              : 'Hãy cho phép APP NVPTTT cài ứng dụng rồi quay lại để tiếp tục.',
+              : 'Hãy cho phép Delivery Support cài ứng dụng rồi quay lại để tiếp tục.',
         );
       }
     } catch (_) {

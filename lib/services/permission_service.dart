@@ -93,49 +93,6 @@ class PermissionService {
     }
   }
 
-  /// Kiểm tra quyền đọc contacts
-  Future<bool> requestContactsPermission() async {
-    final status = await Permission.contacts.status;
-
-    if (status.isGranted) {
-      return true;
-    }
-
-    if (status.isDenied) {
-      final result = await Permission.contacts.request();
-      return result.isGranted;
-    }
-
-    if (status.isPermanentlyDenied) {
-      await openAppSettings();
-      return false;
-    }
-
-    return false;
-  }
-
-  /// Kiểm tra và yêu cầu quyền notification
-  Future<bool> requestNotificationPermission() async {
-    final status = await Permission.notification.status;
-
-    if (status.isGranted) {
-      return true;
-    }
-
-    if (status.isDenied) {
-      final result = await Permission.notification.request();
-      return result.isGranted;
-    }
-
-    if (status.isPermanentlyDenied) {
-      // Mở settings để user có thể cấp quyền thủ công
-      await openAppSettings();
-      return false;
-    }
-
-    return false;
-  }
-
   /// Kiểm tra và yêu cầu quyền gửi SMS
   Future<bool> requestSmsPermission() async {
     final status = await Permission.sms.status;
@@ -189,14 +146,6 @@ class PermissionService {
       'notification': results[2].isGranted,
       'sms': results[3].isGranted,
     };
-  }
-
-  /// Kiểm tra xem có cần hiển thị dialog giải thích không
-  Future<bool> shouldShowRequestPermissionRationale() async {
-    final phoneStatus = await Permission.phone.status;
-    final contactsStatus = await Permission.contacts.status;
-
-    return phoneStatus.isDenied || contactsStatus.isDenied;
   }
 
   /// Kiểm tra xem ứng dụng đã được miễn trừ tối ưu hóa pin (chạy ngầm không bị tắt) chưa

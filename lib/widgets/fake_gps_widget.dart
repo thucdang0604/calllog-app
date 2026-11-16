@@ -30,13 +30,6 @@ class _FakeGpsWidgetState extends State<FakeGpsWidget> with WidgetsBindingObserv
     _lngController.text = '105.854444';
     _checkStatus();
     _loadSavedLocations();
-
-    // Tự động dò vị trí GPS thực tế của máy ngay khi mở app
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_isRunning) {
-        _fetchCurrentDeviceLocation(silent: true);
-      }
-    });
   }
 
   @override
@@ -672,11 +665,12 @@ class _FakeGpsWidgetState extends State<FakeGpsWidget> with WidgetsBindingObserv
             children: [
               Icon(Icons.bookmarks, size: 16, color: Colors.purple[700]),
               const SizedBox(width: 6),
-              const Text(
-                'Vị trí cá nhân đã lưu:',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.black87),
+              const Expanded(
+                child: Text(
+                  'Vị trí cá nhân đã lưu:',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.black87),
+                ),
               ),
-              const Spacer(),
               if (_savedLocations.isNotEmpty)
                 Text(
                   '(${_savedLocations.length})',
